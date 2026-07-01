@@ -13,8 +13,14 @@ type PublicSettings = {
   hasPersonalAccessToken: boolean;
   hasSessionSecret: boolean;
   hasSettingsEncryptionKey: boolean;
+  serverTokenAuthAllowed: boolean;
   githubConfigured: boolean;
   runtimeSettingsAllowed: boolean;
+  settingsAdminRequired: boolean;
+  settingsAdminConfigured: boolean;
+  hasSettingsAdminKey: boolean;
+  settingsStorage: "redis" | "filesystem";
+  redisSettingsConfigured: boolean;
   missing: string[];
   updatedAt?: string;
 };
@@ -27,6 +33,7 @@ export function SettingsPage() {
   const [githubClientSecret, setGithubClientSecret] = useState("");
   const [personalAccessToken, setPersonalAccessToken] = useState("");
   const [sessionSecret, setSessionSecret] = useState("");
+  const [settingsAdminKey, setSettingsAdminKey] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -63,7 +70,10 @@ export function SettingsPage() {
     try {
       const response = await fetch("/api/settings/github", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(settings?.settingsAdminRequired ? { "X-Settings-Admin-Key": settingsAdminKey } : {})
+        },
         body: JSON.stringify({
           authMode,
           appUrl,
@@ -79,6 +89,7 @@ export function SettingsPage() {
       setGithubClientSecret("");
       setPersonalAccessToken("");
       setSessionSecret("");
+      setSettingsAdminKey("");
       setMessage(authMode === "token" ? "Token saved. GitHub is connected." : "Settings saved. GitHub sign-in is ready.");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Unable to save settings.");
@@ -134,6 +145,26 @@ export function SettingsPage() {
           <ProductionEnvironmentSettings settings={settings} callbackUrl={callbackUrl} />
         ) : (
           <div className="settingsForm">
+            {settings?.settingsAdminRequired ? (
+              <>
+                <div className="settingsMeta">
+                  <ShieldCheck size={16} aria-hidden="true" />
+                  Production runtime Settings are enabled. Enter the setup key before saving changes.
+                </div>
+                <label>
+                  Production setup key
+                  <input
+                    value={settingsAdminKey}
+                    onChange={(event) => setSettingsAdminKey(event.target.value)}
+                    placeholder={settings.settingsAdminConfigured ? "Enter SETTINGS_ADMIN_KEY" : "SETTINGS_ADMIN_KEY is missing"}
+                    type="password"
+                    autoComplete="new-password"
+                    disabled={!settings.settingsAdminConfigured}
+                  />
+                </label>
+              </>
+            ) : null}
+
             <div className="modeSelector" role="radiogroup" aria-label="GitHub connection mode" aria-describedby="mode-help">
               <button
                 className={authMode === "token" ? "modeButton modeButtonActive" : "modeButton"}
@@ -224,10 +255,18 @@ export function SettingsPage() {
 
             <div className="settingsMeta">
               <ShieldCheck size={16} aria-hidden="true" />
-              {authMode === "token"
-                ? "Use a fine-grained token for only the personal repositories this tool should access."
-                : "Use this callback URL in your GitHub OAuth app settings."}
+              {settings?.settingsStorage === "redis"
+                ? "Settings are encrypted and stored in Redis/Upstash."
+                : authMode === "token"
+                  ? "Use a fine-grained token for only the personal repositories this tool should access."
+                  : "Use this callback URL in your GitHub OAuth app settings."}
             </div>
+
+            {settings?.settingsAdminRequired && !settings.redisSettingsConfigured ? (
+              <div className="softNotice">
+                Redis/Upstash is not configured. Runtime settings will use filesystem storage, which may not persist on serverless hosts.
+              </div>
+            ) : null}
 
             {settings && !settings.githubConfigured ? (
               <div className="softNotice">
@@ -239,7 +278,13 @@ export function SettingsPage() {
             {error ? <div className="errorPanel" role="alert">{error}</div> : null}
 
             <div className="actionRow">
-              <button className="primaryButton" type="button" onClick={saveSettings} disabled={saving} aria-busy={saving}>
+              <button
+                className="primaryButton"
+                type="button"
+                onClick={saveSettings}
+                disabled={saving || Boolean(settings?.settingsAdminRequired && !settings.settingsAdminConfigured)}
+                aria-busy={saving}
+              >
                 {saving ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Save size={18} aria-hidden="true" />}
                 Save settings
               </button>
@@ -262,16 +307,34 @@ function ProductionEnvironmentSettings({ settings, callbackUrl }: { settings: Pu
 
       <div className="settingsMeta">
         <ShieldCheck size={16} aria-hidden="true" />
-        Production should use OAuth/GitHub App mode. Token mode on hosted production requires an explicit server-side opt-in.
+        ALLOW_SERVER_TOKEN_AUTH enables hosted token mode only. It does not unlock this Settings page.
       </div>
 
       <div className="envChecklist" aria-label="Production environment variables">
-        <h2>Required for production OAuth</h2>
+        <h2>Production token mode</h2>
+        <EnvVarRow name="GITHUB_TOKEN" configured={settings.hasPersonalAccessToken} detail="Fine-grained token for the personal repositories this tool may update" />
+        <EnvVarRow name="ALLOW_SERVER_TOKEN_AUTH" configured={settings.serverTokenAuthAllowed} detail="Must be true for GITHUB_TOKEN auth on hosted production" />
+      </div>
+
+      <div className="envChecklist" aria-label="Production OAuth environment variables">
+        <h2>Production OAuth mode</h2>
         <EnvVarRow name="NEXT_PUBLIC_APP_URL" configured={Boolean(settings.appUrl)} detail={settings.appUrl || "Your deployed app URL"} />
         <EnvVarRow name="GITHUB_CLIENT_ID" configured={Boolean(settings.githubClientId)} detail={settings.githubClientId || "GitHub OAuth or GitHub App client ID"} />
         <EnvVarRow name="GITHUB_CLIENT_SECRET" configured={settings.hasGithubClientSecret} detail="Stored in Vercel environment variables" />
         <EnvVarRow name="SESSION_SECRET" configured={settings.hasSessionSecret} detail="Long random value used to protect sessions" />
-        <EnvVarRow name="SETTINGS_ENCRYPTION_KEY" configured={settings.hasSettingsEncryptionKey} detail="Required if runtime settings are enabled later" />
+        <EnvVarRow name="SETTINGS_ENCRYPTION_KEY" configured={settings.hasSettingsEncryptionKey} detail="Required only if runtime settings are enabled later" />
+      </div>
+
+      <div className="envChecklist" aria-label="Runtime settings environment variables">
+        <h2>Runtime Settings editor</h2>
+        <EnvVarRow name="ALLOW_RUNTIME_SETTINGS" configured={settings.runtimeSettingsAllowed} detail="Set true only if the Settings page should write secrets at runtime." />
+        <EnvVarRow name="SETTINGS_ADMIN_KEY" configured={settings.hasSettingsAdminKey} detail="Required setup key for saving production Settings from the browser" />
+        <EnvVarRow name="SETTINGS_ENCRYPTION_KEY" configured={settings.hasSettingsEncryptionKey} detail="Required to encrypt saved runtime settings" />
+        <EnvVarRow
+          name="Redis/Upstash REST"
+          configured={settings.redisSettingsConfigured}
+          detail="Set KV_REST_API_URL and KV_REST_API_TOKEN, or UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN"
+        />
       </div>
 
       <label>
