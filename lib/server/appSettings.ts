@@ -45,6 +45,8 @@ export type PublicSettings = {
   hasSettingsAdminKey: boolean;
   settingsStorage: "redis" | "filesystem";
   redisSettingsConfigured: boolean;
+  vercelBlobDetected: boolean;
+  blobReadWriteTokenConfigured: boolean;
   missing: string[];
   updatedAt?: string;
 };
@@ -87,6 +89,8 @@ export async function readPublicSettings(): Promise<PublicSettings> {
     hasSettingsAdminKey: Boolean(process.env.SETTINGS_ADMIN_KEY && process.env.SETTINGS_ADMIN_KEY.length >= 16),
     settingsStorage: redisSettingsConfigured() ? "redis" : "filesystem",
     redisSettingsConfigured: redisSettingsConfigured(),
+    vercelBlobDetected: vercelBlobDetected(),
+    blobReadWriteTokenConfigured: blobReadWriteTokenConfigured(),
     missing,
     updatedAt: stored.updatedAt
   };
@@ -217,6 +221,14 @@ export function verifyRuntimeSettingsAdminKey(value: string | null): boolean {
 
 export function redisSettingsConfigured(): boolean {
   return Boolean(redisSettingsConfig());
+}
+
+export function vercelBlobDetected(): boolean {
+  return Boolean(process.env.BLOB_STORE_ID || process.env.BLOB_WEBHOOK_PUBLIC_KEY || process.env.BLOB_READ_WRITE_TOKEN);
+}
+
+export function blobReadWriteTokenConfigured(): boolean {
+  return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
 }
 
 async function readStoredSettings(): Promise<StoredSettings> {
