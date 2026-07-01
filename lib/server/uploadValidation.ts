@@ -68,7 +68,7 @@ export function validateUploadPayload(input: unknown): ValidatedUpload {
     }
 
     const path = readString(file, "path");
-    const content = readString(file, "content");
+    const content = readFileContent(file, "content");
     const size = typeof file.size === "number" && file.size >= 0 ? file.size : new TextEncoder().encode(content).byteLength;
     const validation = validateCommitPath(path);
     if (!validation.ok) {
@@ -205,6 +205,14 @@ function readString(input: Record<string, unknown>, key: string): string {
     throw new Error(`Missing required field: ${key}`);
   }
   return value.trim();
+}
+
+function readFileContent(input: Record<string, unknown>, key: string): string {
+  const value = input[key];
+  if (typeof value !== "string") {
+    throw new Error(`Missing required field: ${key}`);
+  }
+  return value;
 }
 
 function readOptionalString(input: Record<string, unknown>, key: string): string | undefined {

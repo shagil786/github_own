@@ -36,6 +36,7 @@ Ignored by default:
 
 Skipped by default:
 
+- Empty files
 - Files over `MAX_FILE_SIZE_BYTES`, default 5 MB
 - Common binary/archive/media/font/database/cache file types
 - Files whose first bytes look binary
@@ -123,6 +124,8 @@ Set these environment variables in Vercel:
 - `SETTINGS_ENCRYPTION_KEY`
 
 For hosted production, use OAuth mode and keep runtime Settings disabled unless you explicitly set `ALLOW_RUNTIME_SETTINGS=true`.
+When runtime settings are disabled, the Settings page is read-only and shows which production environment variables are configured or missing.
+Hosted production token mode is also disabled unless `ALLOW_SERVER_TOKEN_AUTH=true`; OAuth/GitHub App mode is recommended.
 
 Vercel Functions currently limit request and response bodies to 4.5 MB. Keep `MAX_TOTAL_UPLOAD_BYTES` below that practical payload size for hosted Vercel deployments, or use this app locally/self-hosted for larger folder uploads.
 
@@ -133,8 +136,10 @@ Vercel Functions currently limit request and response bodies to 4.5 MB. Keep `MA
 3. Review ignored, skipped, blocked, and approved files.
 4. Choose a personal GitHub repository.
 5. Enter a new branch name and commit message.
-6. Compare approved files with GitHub to see changed files and unchanged files that will be skipped. This comparison sends file metadata and hashes, not file contents.
+6. Compare approved files with GitHub to see new, modified, and unchanged files. This comparison sends file metadata and hashes, not file contents.
 7. Create a pull request. Files already identical to the base branch are skipped automatically.
+
+If every file appears as new, the selected base branch does not contain matching commit paths yet. Merge the previous pull request into that base branch, or choose the branch that already contains the uploaded project files before comparing again.
 
 ## API routes
 

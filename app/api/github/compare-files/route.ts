@@ -4,7 +4,7 @@ import { getGitHubCredentials } from "@/lib/server/githubAuth";
 import { guardContentLength, guardPostRequest } from "@/lib/server/requestGuards";
 import { validateCompareFilesPayload } from "@/lib/server/uploadValidation";
 import { DEFAULT_MAX_TOTAL_UPLOAD_BYTES } from "@/lib/security/pathRules";
-import type { CompareFilePayload, CompareFilesResult } from "@/lib/types";
+import type { CompareFilePayload, CompareFileStatus, CompareFilesResult } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -34,16 +34,26 @@ export async function POST(request: NextRequest) {
       baseBranch: comparison.baseBranch,
       fileCount: payload.files.length,
       changedFilesCount: comparison.changedFilesCount,
+      newFilesCount: comparison.newFilesCount,
+      modifiedFilesCount: comparison.modifiedFilesCount,
       unchangedFilesCount: comparison.unchangedFilesCount,
+      matchingPathsCount: comparison.matchingPathsCount,
       totalBytes: payload.totalBytes
     });
 
     const response: CompareFilesResult = {
       baseBranch: comparison.baseBranch,
-      changedFiles: comparison.changedFiles.map(toMetadata),
-      unchangedFiles: comparison.unchangedFiles.map(toMetadata),
+      changedFiles: [
+        ...comparison.newFiles.map((file) => toMetadata(file, "new")),
+        ...comparison.modifiedFiles.map((file) => toMetadata(file, "modified"))
+      ],
+      unchangedFiles: comparison.unchangedFiles.map((file) => toMetadata(file, "unchanged")),
       changedFilesCount: comparison.changedFilesCount,
       unchangedFilesCount: comparison.unchangedFilesCount,
+      newFilesCount: comparison.newFilesCount,
+      modifiedFilesCount: comparison.modifiedFilesCount,
+      matchingPathsCount: comparison.matchingPathsCount,
+      existingFilesCount: comparison.existingFilesCount,
       changedBytes: comparison.changedBytes,
       unchangedBytes: comparison.unchangedBytes
     };
@@ -60,9 +70,10 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function toMetadata(file: CompareFilePayload) {
+function toMetadata(file: CompareFilePayload, status: CompareFileStatus) {
   return {
     path: file.path,
-    size: file.size
+    size: file.size,
+    status
   };
 }

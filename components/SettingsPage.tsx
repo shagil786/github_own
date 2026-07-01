@@ -12,7 +12,9 @@ type PublicSettings = {
   hasGithubClientSecret: boolean;
   hasPersonalAccessToken: boolean;
   hasSessionSecret: boolean;
+  hasSettingsEncryptionKey: boolean;
   githubConfigured: boolean;
+  runtimeSettingsAllowed: boolean;
   missing: string[];
   updatedAt?: string;
 };
@@ -111,7 +113,9 @@ export function SettingsPage() {
         <div>
           <h2>GitHub connection</h2>
           <p>
-            Connect with a personal access token or a GitHub OAuth app. Secrets are stored server-side and are not returned after saving.
+            {settings?.runtimeSettingsAllowed === false
+              ? "Production uses environment variables. Secrets are read server-side and are never exposed to the browser."
+              : "Connect with a personal access token or a GitHub OAuth app. Secrets are stored server-side and are not returned after saving."}
           </p>
         </div>
         <div className={settings?.githubConfigured ? "readyPill" : "needsSetupPill"}>
@@ -126,6 +130,8 @@ export function SettingsPage() {
             <Loader2 className="spin" size={18} aria-hidden="true" />
             Loading settings
           </div>
+        ) : settings?.runtimeSettingsAllowed === false ? (
+          <ProductionEnvironmentSettings settings={settings} callbackUrl={callbackUrl} />
         ) : (
           <div className="settingsForm">
             <div className="modeSelector" role="radiogroup" aria-label="GitHub connection mode" aria-describedby="mode-help">
@@ -242,6 +248,61 @@ export function SettingsPage() {
         )}
       </section>
     </main>
+  );
+}
+
+function ProductionEnvironmentSettings({ settings, callbackUrl }: { settings: PublicSettings; callbackUrl: string }) {
+  return (
+    <div className="settingsForm">
+      <div className={settings.githubConfigured ? "successInline" : "softNotice"} role="status">
+        {settings.githubConfigured
+          ? "Production environment variables are configured."
+          : "Runtime settings are disabled in production. Configure environment variables in your host, then redeploy."}
+      </div>
+
+      <div className="settingsMeta">
+        <ShieldCheck size={16} aria-hidden="true" />
+        Production should use OAuth/GitHub App mode. Token mode on hosted production requires an explicit server-side opt-in.
+      </div>
+
+      <div className="envChecklist" aria-label="Production environment variables">
+        <h2>Required for production OAuth</h2>
+        <EnvVarRow name="NEXT_PUBLIC_APP_URL" configured={Boolean(settings.appUrl)} detail={settings.appUrl || "Your deployed app URL"} />
+        <EnvVarRow name="GITHUB_CLIENT_ID" configured={Boolean(settings.githubClientId)} detail={settings.githubClientId || "GitHub OAuth or GitHub App client ID"} />
+        <EnvVarRow name="GITHUB_CLIENT_SECRET" configured={settings.hasGithubClientSecret} detail="Stored in Vercel environment variables" />
+        <EnvVarRow name="SESSION_SECRET" configured={settings.hasSessionSecret} detail="Long random value used to protect sessions" />
+        <EnvVarRow name="SETTINGS_ENCRYPTION_KEY" configured={settings.hasSettingsEncryptionKey} detail="Required if runtime settings are enabled later" />
+      </div>
+
+      <label>
+        OAuth callback URL
+        <input value={callbackUrl} readOnly />
+      </label>
+
+      {!settings.githubConfigured ? (
+        <div className="errorPanel" role="alert">
+          Missing: {settings.missing.length ? settings.missing.join(", ") : "GitHub environment variables"}.
+        </div>
+      ) : null}
+
+      <div className="fieldHint">
+        After updating Vercel environment variables, redeploy the project so the server picks them up.
+      </div>
+    </div>
+  );
+}
+
+function EnvVarRow({ name, configured, detail }: { name: string; configured: boolean; detail: string }) {
+  return (
+    <div className="envVarRow">
+      <div>
+        <strong>{name}</strong>
+        <span>{detail}</span>
+      </div>
+      <span className={configured ? "statusBadge statusBadge-commit" : "statusBadge statusBadge-blocked"}>
+        {configured ? "Set" : "Missing"}
+      </span>
+    </div>
   );
 }
 

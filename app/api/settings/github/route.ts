@@ -6,9 +6,6 @@ import { guardPostRequest } from "@/lib/server/requestGuards";
 export const runtime = "nodejs";
 
 export async function GET() {
-  if (!runtimeSettingsAllowed()) {
-    return NextResponse.json({ error: "Runtime settings are disabled in production. Use environment variables." }, { status: 403 });
-  }
   return NextResponse.json(await readPublicSettings());
 }
 

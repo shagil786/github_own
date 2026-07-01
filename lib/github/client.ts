@@ -62,9 +62,15 @@ type GitHubUserResponse = {
 
 type FileComparison<T extends { path: string; size: number }> = {
   changedFiles: T[];
+  newFiles: T[];
+  modifiedFiles: T[];
   unchangedFiles: T[];
   changedFilesCount: number;
+  newFilesCount: number;
+  modifiedFilesCount: number;
   unchangedFilesCount: number;
+  matchingPathsCount: number;
+  existingFilesCount: number;
   changedBytes: number;
   unchangedBytes: number;
 };
@@ -617,21 +623,34 @@ function compareByGitBlobSha<T extends { path: string; size: number }>(
   getSha: (file: T) => string
 ): FileComparison<T> {
   const changedFiles: T[] = [];
+  const newFiles: T[] = [];
+  const modifiedFiles: T[] = [];
   const unchangedFiles: T[] = [];
 
   for (const file of files) {
-    if (existingBlobShas.get(file.path) === getSha(file)) {
+    const existingSha = existingBlobShas.get(file.path);
+    if (!existingSha) {
+      newFiles.push(file);
+      changedFiles.push(file);
+    } else if (existingSha === getSha(file)) {
       unchangedFiles.push(file);
     } else {
+      modifiedFiles.push(file);
       changedFiles.push(file);
     }
   }
 
   return {
     changedFiles,
+    newFiles,
+    modifiedFiles,
     unchangedFiles,
     changedFilesCount: changedFiles.length,
+    newFilesCount: newFiles.length,
+    modifiedFilesCount: modifiedFiles.length,
     unchangedFilesCount: unchangedFiles.length,
+    matchingPathsCount: modifiedFiles.length + unchangedFiles.length,
+    existingFilesCount: existingBlobShas.size,
     changedBytes: changedFiles.reduce((total, file) => total + file.size, 0),
     unchangedBytes: unchangedFiles.reduce((total, file) => total + file.size, 0)
   };
