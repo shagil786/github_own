@@ -128,16 +128,18 @@ Hosted token-mode production variables:
 - `GITHUB_TOKEN`
 - `ALLOW_SERVER_TOKEN_AUTH=true`
 
-For hosted production, use OAuth mode and keep runtime Settings disabled unless you explicitly set `ALLOW_RUNTIME_SETTINGS=true`.
+For hosted production, use OAuth mode or enable the protected runtime Settings editor with a setup key.
 When runtime settings are disabled, the Settings page is read-only and shows which production environment variables are configured or missing.
-`ALLOW_SERVER_TOKEN_AUTH=true` enables token authentication only; it does not unlock the Settings page. To make the Settings page writable in production, set `ALLOW_RUNTIME_SETTINGS=true`, but this is not recommended for normal hosted deployments.
+`ALLOW_SERVER_TOKEN_AUTH=true` enables token authentication only; it does not unlock the Settings page by itself.
 
 Production browser-based Settings setup:
 
-- `ALLOW_RUNTIME_SETTINGS=true`
-- `SETTINGS_ADMIN_KEY`
-- `SETTINGS_ENCRYPTION_KEY`
+- `SETTINGS_ADMIN_KEY`, at least 16 characters
 - Redis/Upstash REST variables: either `KV_REST_API_URL` and `KV_REST_API_TOKEN`, or `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`
+
+When `SETTINGS_ADMIN_KEY` is present in production, the Settings page becomes writable after redeploy and requires the setup key before saving. The GitHub token is then saved by the app instead of being read from `GITHUB_TOKEN`. `ALLOW_RUNTIME_SETTINGS=true` is still accepted as an explicit override, but it is not required when the setup key is configured.
+
+`SETTINGS_ENCRYPTION_KEY` is optional. If omitted, the app derives the encryption key from `SETTINGS_ADMIN_KEY`. Set a separate `SETTINGS_ENCRYPTION_KEY` only if you want to rotate the setup key independently from encrypted saved settings.
 
 When Redis/Upstash REST variables are present, saved runtime settings are encrypted and stored in Redis under `SETTINGS_REDIS_KEY` (default `folder-to-github:settings`). Without Redis, runtime settings fall back to `.app-data`, which is fine locally or on a persistent server but may not persist on serverless hosting.
 

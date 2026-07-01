@@ -26,6 +26,7 @@ export type EffectiveGithubSettings = {
   githubClientId?: string;
   githubClientSecret?: string;
   personalAccessToken?: string;
+  personalAccessTokenSource?: "saved" | "env";
   sessionSecret?: string;
 };
 
@@ -80,13 +81,13 @@ export async function readPublicSettings(): Promise<PublicSettings> {
     hasGithubClientSecret: Boolean(effective.githubClientSecret),
     hasPersonalAccessToken: Boolean(effective.personalAccessToken),
     hasSessionSecret: Boolean(effective.sessionSecret),
-    hasSettingsEncryptionKey: Boolean(process.env.SETTINGS_ENCRYPTION_KEY),
-    serverTokenAuthAllowed: process.env.ALLOW_SERVER_TOKEN_AUTH === "true",
+    hasSettingsEncryptionKey: settingsEncryptionConfigured(),
+    serverTokenAuthAllowed: isEnabledEnv(process.env.ALLOW_SERVER_TOKEN_AUTH),
     githubConfigured: missing.length === 0,
     runtimeSettingsAllowed: runtimeSettingsAllowed(),
     settingsAdminRequired: runtimeSettingsAdminRequired(),
     settingsAdminConfigured: runtimeSettingsAdminConfigured(),
-    hasSettingsAdminKey: Boolean(process.env.SETTINGS_ADMIN_KEY && process.env.SETTINGS_ADMIN_KEY.length >= 16),
+    hasSettingsAdminKey: hasSettingsAdminKey(),
     settingsStorage: redisSettingsConfigured() ? "redis" : "filesystem",
     redisSettingsConfigured: redisSettingsConfigured(),
     vercelBlobDetected: vercelBlobDetected(),
@@ -135,13 +136,15 @@ export async function getEffectiveGithubSettings(): Promise<EffectiveGithubSetti
   const stored = await readStoredSettings();
   const envHasOAuth = Boolean(process.env.GITHUB_CLIENT_ID || process.env.GITHUB_CLIENT_SECRET);
   const authMode = stored.authMode ?? (envHasOAuth && !process.env.GITHUB_TOKEN ? "oauth" : "token");
+  const personalAccessToken = stored.personalAccessToken || process.env.GITHUB_TOKEN;
 
   return {
     authMode,
     appUrl: stored.appUrl || process.env.NEXT_PUBLIC_APP_URL,
     githubClientId: stored.githubClientId || process.env.GITHUB_CLIENT_ID,
     githubClientSecret: stored.githubClientSecret || process.env.GITHUB_CLIENT_SECRET,
-    personalAccessToken: stored.personalAccessToken || process.env.GITHUB_TOKEN,
+    personalAccessToken,
+    personalAccessTokenSource: stored.personalAccessToken ? "saved" : personalAccessToken ? "env" : undefined,
     sessionSecret: stored.sessionSecret || process.env.SESSION_SECRET
   };
 }
@@ -193,7 +196,7 @@ export async function missingGithubSettings(): Promise<string[]> {
 }
 
 export function runtimeSettingsAllowed(): boolean {
-  return process.env.NODE_ENV !== "production" || process.env.ALLOW_RUNTIME_SETTINGS === "true";
+  return process.env.NODE_ENV !== "production" || productionSettingsUnlocked() || isEnabledEnv(process.env.ALLOW_RUNTIME_SETTINGS);
 }
 
 export function runtimeSettingsAdminRequired(): boolean {
@@ -201,7 +204,7 @@ export function runtimeSettingsAdminRequired(): boolean {
 }
 
 export function runtimeSettingsAdminConfigured(): boolean {
-  return !runtimeSettingsAdminRequired() || Boolean(process.env.SETTINGS_ADMIN_KEY && process.env.SETTINGS_ADMIN_KEY.length >= 16);
+  return !runtimeSettingsAdminRequired() || hasSettingsAdminKey();
 }
 
 export function verifyRuntimeSettingsAdminKey(value: string | null): boolean {
@@ -229,6 +232,18 @@ export function vercelBlobDetected(): boolean {
 
 export function blobReadWriteTokenConfigured(): boolean {
   return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+}
+
+function productionSettingsUnlocked(): boolean {
+  return hasSettingsAdminKey();
+}
+
+function hasSettingsAdminKey(): boolean {
+  return Boolean(process.env.SETTINGS_ADMIN_KEY && process.env.SETTINGS_ADMIN_KEY.length >= 16);
+}
+
+function settingsEncryptionConfigured(): boolean {
+  return Boolean(process.env.SETTINGS_ENCRYPTION_KEY || process.env.SETTINGS_ADMIN_KEY);
 }
 
 async function readStoredSettings(): Promise<StoredSettings> {
@@ -267,7 +282,11 @@ function missingFromEffective(settings: EffectiveGithubSettings): string[] {
     if (!settings.personalAccessToken) {
       missing.push("GitHub personal access token");
     }
-    if (process.env.NODE_ENV === "production" && process.env.ALLOW_SERVER_TOKEN_AUTH !== "true") {
+    if (
+      process.env.NODE_ENV === "production" &&
+      settings.personalAccessTokenSource === "env" &&
+      !isEnabledEnv(process.env.ALLOW_SERVER_TOKEN_AUTH)
+    ) {
       missing.push("ALLOW_SERVER_TOKEN_AUTH=true");
     }
     return missing;
@@ -329,13 +348,13 @@ function decrypt(payload: string): string {
 }
 
 function getSettingsKey(): Buffer {
-  const keyFromEnv = process.env.SETTINGS_ENCRYPTION_KEY;
+  const keyFromEnv = process.env.SETTINGS_ENCRYPTION_KEY || process.env.SETTINGS_ADMIN_KEY;
   if (keyFromEnv) {
     return crypto.createHash("sha256").update(keyFromEnv).digest();
   }
 
   if (process.env.NODE_ENV === "production") {
-    throw new Error("SETTINGS_ENCRYPTION_KEY is required in production.");
+    throw new Error("SETTINGS_ADMIN_KEY is required to encrypt saved settings in production.");
   }
 
   return getOrCreateLocalSettingsKey();
@@ -411,4 +430,9 @@ async function redisCommand<T>(config: RedisSettingsConfig, command: unknown[]):
 
 function isMissingFileError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+function isEnabledEnv(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
 }

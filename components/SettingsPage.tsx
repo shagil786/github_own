@@ -27,6 +27,9 @@ type PublicSettings = {
   updatedAt?: string;
 };
 
+const PRODUCTION_RUNTIME_SETTINGS_HELP =
+  "Runtime Settings writes are disabled on this deployment. To save a GitHub key from this page, set SETTINGS_ADMIN_KEY in Vercel and redeploy. Add Redis/Upstash REST variables for durable storage.";
+
 export function SettingsPage() {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
   const [authMode, setAuthMode] = useState<"token" | "oauth">("token");
@@ -66,6 +69,12 @@ export function SettingsPage() {
   }
 
   async function saveSettings() {
+    if (settings?.runtimeSettingsAllowed === false) {
+      setMessage("");
+      setError(PRODUCTION_RUNTIME_SETTINGS_HELP);
+      return;
+    }
+
     setSaving(true);
     setMessage("");
     setError("");
@@ -94,7 +103,13 @@ export function SettingsPage() {
       setSettingsAdminKey("");
       setMessage(authMode === "token" ? "Token saved. GitHub is connected." : "Settings saved. GitHub sign-in is ready.");
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Unable to save settings.");
+      const nextError = saveError instanceof Error ? saveError.message : "Unable to save settings.";
+      if (nextError.includes("Runtime settings are disabled in production")) {
+        await loadSettings();
+        setError(PRODUCTION_RUNTIME_SETTINGS_HELP);
+      } else {
+        setError(nextError);
+      }
     } finally {
       setSaving(false);
     }
@@ -331,14 +346,14 @@ function ProductionEnvironmentSettings({ settings, callbackUrl }: { settings: Pu
         <EnvVarRow name="GITHUB_CLIENT_ID" configured={Boolean(settings.githubClientId)} detail={settings.githubClientId || "GitHub OAuth or GitHub App client ID"} />
         <EnvVarRow name="GITHUB_CLIENT_SECRET" configured={settings.hasGithubClientSecret} detail="Stored in Vercel environment variables" />
         <EnvVarRow name="SESSION_SECRET" configured={settings.hasSessionSecret} detail="Long random value used to protect sessions" />
-        <EnvVarRow name="SETTINGS_ENCRYPTION_KEY" configured={settings.hasSettingsEncryptionKey} detail="Required only if runtime settings are enabled later" />
+        <EnvVarRow name="Settings encryption" configured={settings.hasSettingsEncryptionKey} detail="Uses SETTINGS_ENCRYPTION_KEY, or SETTINGS_ADMIN_KEY as the simple fallback" />
       </div>
 
       <div className="envChecklist" aria-label="Runtime settings environment variables">
         <h2>Runtime Settings editor</h2>
-        <EnvVarRow name="ALLOW_RUNTIME_SETTINGS" configured={settings.runtimeSettingsAllowed} detail="Set true only if the Settings page should write secrets at runtime." />
+        <EnvVarRow name="Settings editor access" configured={settings.runtimeSettingsAllowed} detail="Enabled by SETTINGS_ADMIN_KEY. ALLOW_RUNTIME_SETTINGS=true is still accepted as an override." />
         <EnvVarRow name="SETTINGS_ADMIN_KEY" configured={settings.hasSettingsAdminKey} detail="Required setup key for saving production Settings from the browser" />
-        <EnvVarRow name="SETTINGS_ENCRYPTION_KEY" configured={settings.hasSettingsEncryptionKey} detail="Required to encrypt saved runtime settings" />
+        <EnvVarRow name="Settings encryption" configured={settings.hasSettingsEncryptionKey} detail="A separate SETTINGS_ENCRYPTION_KEY is optional when SETTINGS_ADMIN_KEY is set" />
         <EnvVarRow
           name="Redis/Upstash REST"
           configured={settings.redisSettingsConfigured}
