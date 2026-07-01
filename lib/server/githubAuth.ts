@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { fetchAuthenticatedUser } from "@/lib/github/client";
 import type { AuthenticatedUser } from "@/lib/types";
-import { getEffectiveGithubSettings } from "@/lib/server/appSettings";
+import { getEffectiveGithubSettings, type EffectiveGithubSettings } from "@/lib/server/appSettings";
 import { readSession } from "@/lib/server/session";
 
 export type GitHubCredentials = {
@@ -22,7 +22,7 @@ export async function getGitHubCredentials(request: NextRequest): Promise<GitHub
 
   const settings = await getEffectiveGithubSettings();
   if (settings.authMode === "token" && settings.personalAccessToken) {
-    if (!serverTokenAuthAllowed(request)) {
+    if (!serverTokenAuthAllowed(request, settings)) {
       return null;
     }
 
@@ -40,7 +40,11 @@ export async function getGitHubCredentials(request: NextRequest): Promise<GitHub
   return null;
 }
 
-function serverTokenAuthAllowed(request: NextRequest): boolean {
+function serverTokenAuthAllowed(request: NextRequest, settings: EffectiveGithubSettings): boolean {
+  if (settings.personalAccessTokenSource === "saved") {
+    return true;
+  }
+
   if (process.env.ALLOW_SERVER_TOKEN_AUTH === "true") {
     return true;
   }

@@ -12,7 +12,7 @@ import { guardPostRequest } from "@/lib/server/requestGuards";
 
 export const runtime = "nodejs";
 const RUNTIME_SETTINGS_DISABLED_MESSAGE =
-  "Runtime settings are disabled in production. Use environment variables instead. ALLOW_SERVER_TOKEN_AUTH only enables GITHUB_TOKEN authentication; set ALLOW_RUNTIME_SETTINGS=true only if you intentionally want the Settings page to write secrets at runtime.";
+  "Runtime settings are disabled in production. To save a GitHub key from this Settings page, set SETTINGS_ADMIN_KEY in Vercel and redeploy. Add Redis/Upstash REST variables for durable storage. Hosted token mode can also use GITHUB_TOKEN and ALLOW_SERVER_TOKEN_AUTH=true.";
 
 export async function GET() {
   return NextResponse.json(await readPublicSettings());
