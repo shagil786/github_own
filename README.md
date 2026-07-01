@@ -141,6 +141,8 @@ Production browser-based Settings setup:
 
 When Redis/Upstash REST variables are present, saved runtime settings are encrypted and stored in Redis under `SETTINGS_REDIS_KEY` (default `folder-to-github:settings`). Without Redis, runtime settings fall back to `.app-data`, which is fine locally or on a persistent server but may not persist on serverless hosting.
 
+Vercel Blob variables such as `BLOB_STORE_ID` and `BLOB_WEBHOOK_PUBLIC_KEY` do not give the app a writable settings store. They identify the Blob store / webhook verification path, but writing or overwriting a settings object would require `BLOB_READ_WRITE_TOKEN` and a Blob-backed storage implementation. This app currently uses Redis/Upstash REST for durable runtime Settings storage in production.
+
 Vercel Functions currently limit request and response bodies to 4.5 MB. Keep `MAX_TOTAL_UPLOAD_BYTES` below that practical payload size for hosted Vercel deployments, or use this app locally/self-hosted for larger folder uploads.
 
 ## Flow

@@ -21,6 +21,8 @@ type PublicSettings = {
   hasSettingsAdminKey: boolean;
   settingsStorage: "redis" | "filesystem";
   redisSettingsConfigured: boolean;
+  vercelBlobDetected: boolean;
+  blobReadWriteTokenConfigured: boolean;
   missing: string[];
   updatedAt?: string;
 };
@@ -268,6 +270,13 @@ export function SettingsPage() {
               </div>
             ) : null}
 
+            {settings?.settingsAdminRequired && settings.vercelBlobDetected && !settings.redisSettingsConfigured ? (
+              <div className="softNotice">
+                Vercel Blob variables were detected, but BLOB_STORE_ID and BLOB_WEBHOOK_PUBLIC_KEY do not provide a writable settings store.
+                Use Redis/Upstash REST variables for runtime Settings, or add BLOB_READ_WRITE_TOKEN before enabling Blob-backed storage.
+              </div>
+            ) : null}
+
             {settings && !settings.githubConfigured ? (
               <div className="softNotice">
                 {authMode === "token" ? "Paste your GitHub token to connect." : "Complete the GitHub connection fields to enable sign-in."}
@@ -334,6 +343,20 @@ function ProductionEnvironmentSettings({ settings, callbackUrl }: { settings: Pu
           name="Redis/Upstash REST"
           configured={settings.redisSettingsConfigured}
           detail="Set KV_REST_API_URL and KV_REST_API_TOKEN, or UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN"
+        />
+      </div>
+
+      <div className="envChecklist" aria-label="Vercel Blob environment variables">
+        <h2>Vercel Blob status</h2>
+        <EnvVarRow
+          name="BLOB_STORE_ID / BLOB_WEBHOOK_PUBLIC_KEY"
+          configured={settings.vercelBlobDetected}
+          detail="Detected Blob metadata/webhook variables. These do not let the app write saved Settings."
+        />
+        <EnvVarRow
+          name="BLOB_READ_WRITE_TOKEN"
+          configured={settings.blobReadWriteTokenConfigured}
+          detail="Required only if Blob-backed runtime Settings storage is added and enabled."
         />
       </div>
 
