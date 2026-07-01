@@ -1,5 +1,7 @@
+import crypto from "node:crypto";
 import type {
   AuthenticatedUser,
+  CompareFilePayload,
   CreatePullRequestResult,
   CreateRepositoryPayload,
   GitHubRepository,
@@ -43,11 +45,32 @@ type GitHubBranchResponse = {
   protected?: boolean;
 };
 
+type GitHubTreeResponse = {
+  tree: Array<{
+    path?: string;
+    type?: string;
+    sha?: string;
+  }>;
+  truncated?: boolean;
+};
+
 type GitHubUserResponse = {
   id: number;
   login: string;
   avatar_url: string;
 };
+
+type FileComparison<T extends { path: string; size: number }> = {
+  changedFiles: T[];
+  unchangedFiles: T[];
+  changedFilesCount: number;
+  unchangedFilesCount: number;
+  changedBytes: number;
+  unchangedBytes: number;
+};
+
+export type GitHubFileComparison = FileComparison<UploadFilePayload>;
+export type GitHubFileReferenceComparison = FileComparison<CompareFilePayload>;
 
 export async function githubRequest<T>(
   token: string,
@@ -342,6 +365,44 @@ export async function openPullRequest(
   };
 }
 
+export async function compareFilesWithBaseBranch(
+  token: string,
+  userLogin: string,
+  repoFullName: string,
+  baseBranch: string | undefined,
+  files: UploadFilePayload[]
+): Promise<GitHubFileComparison & { baseBranch: string }> {
+  const { owner, repo } = splitPersonalRepo(repoFullName, userLogin);
+  const repoData = await verifyWritablePersonalRepo(token, userLogin, owner, repo);
+  const resolvedBaseBranch = baseBranch?.trim() || repoData.default_branch;
+  const { baseTreeSha } = await getBranchHead(token, owner, repo, resolvedBaseBranch);
+  const comparison = await compareFilesWithTree(token, owner, repo, baseTreeSha, files);
+
+  return {
+    ...comparison,
+    baseBranch: resolvedBaseBranch
+  };
+}
+
+export async function compareFileReferencesWithBaseBranch(
+  token: string,
+  userLogin: string,
+  repoFullName: string,
+  baseBranch: string | undefined,
+  files: CompareFilePayload[]
+): Promise<GitHubFileReferenceComparison & { baseBranch: string }> {
+  const { owner, repo } = splitPersonalRepo(repoFullName, userLogin);
+  const repoData = await verifyWritablePersonalRepo(token, userLogin, owner, repo);
+  const resolvedBaseBranch = baseBranch?.trim() || repoData.default_branch;
+  const { baseTreeSha } = await getBranchHead(token, owner, repo, resolvedBaseBranch);
+  const comparison = await compareFileReferencesWithTree(token, owner, repo, baseTreeSha, files);
+
+  return {
+    ...comparison,
+    baseBranch: resolvedBaseBranch
+  };
+}
+
 export async function createPullRequestFromFiles(
   token: string,
   userLogin: string,
@@ -353,7 +414,24 @@ export async function createPullRequestFromFiles(
   draft = false
 ): Promise<CreatePullRequestResult> {
   const branch = await createBranch(token, userLogin, repoFullName, branchName, baseBranch);
-  const commit = await commitFilesToBranch(token, userLogin, repoFullName, branch.branchName, commitMessage, files);
+  const comparison = await filterChangedFilesForBranch(token, branch.owner, branch.repo, branch.branchName, files);
+
+  if (comparison.changedFiles.length === 0) {
+    await deleteBranchRef(token, branch.owner, branch.repo, branch.branchName).catch(() => undefined);
+    throw new GitHubApiError(
+      `No changed files were found compared with ${branch.baseBranch}. Nothing needs to be uploaded.`,
+      409
+    );
+  }
+
+  const commit = await commitFilesToBranch(
+    token,
+    userLogin,
+    repoFullName,
+    branch.branchName,
+    commitMessage,
+    comparison.changedFiles
+  );
   const pullRequest = await openPullRequest(
     token,
     userLogin,
@@ -368,7 +446,9 @@ export async function createPullRequestFromFiles(
     branchName: branch.branchName,
     commitSha: commit.commitSha,
     pullRequestUrl: pullRequest.url,
-    pullRequestNumber: pullRequest.number
+    pullRequestNumber: pullRequest.number,
+    uploadedFilesCount: comparison.changedFilesCount,
+    unchangedFilesCount: comparison.unchangedFilesCount
   };
 }
 
@@ -473,6 +553,96 @@ async function getBranchHead(
   };
 }
 
+async function filterChangedFilesForBranch(
+  token: string,
+  owner: string,
+  repo: string,
+  branchName: string,
+  files: UploadFilePayload[]
+): Promise<GitHubFileComparison> {
+  const { baseTreeSha } = await getBranchHead(token, owner, repo, branchName);
+  return compareFilesWithTree(token, owner, repo, baseTreeSha, files);
+}
+
+async function compareFilesWithTree(
+  token: string,
+  owner: string,
+  repo: string,
+  baseTreeSha: string,
+  files: UploadFilePayload[]
+): Promise<GitHubFileComparison> {
+  const existingBlobShas = await getExistingBlobShasForTree(token, owner, repo, baseTreeSha);
+  return compareByGitBlobSha(files, existingBlobShas, (file) => calculateGitBlobSha(file.content));
+}
+
+async function compareFileReferencesWithTree(
+  token: string,
+  owner: string,
+  repo: string,
+  baseTreeSha: string,
+  files: CompareFilePayload[]
+): Promise<GitHubFileReferenceComparison> {
+  const existingBlobShas = await getExistingBlobShasForTree(token, owner, repo, baseTreeSha);
+  return compareByGitBlobSha(files, existingBlobShas, (file) => file.sha);
+}
+
+async function getExistingBlobShasForTree(
+  token: string,
+  owner: string,
+  repo: string,
+  baseTreeSha: string
+): Promise<Map<string, string>> {
+  const { data } = await githubRequest<GitHubTreeResponse>(
+    token,
+    `/repos/${owner}/${repo}/git/trees/${baseTreeSha}?recursive=1`
+  );
+
+  if (data.truncated) {
+    throw new GitHubApiError("The repository tree is too large to compare safely. Try a smaller target repository.", 409);
+  }
+
+  const existingBlobShas = new Map<string, string>();
+  for (const item of data.tree) {
+    if (item.type === "blob" && item.path && item.sha) {
+      existingBlobShas.set(item.path, item.sha);
+    }
+  }
+
+  return existingBlobShas;
+}
+
+function compareByGitBlobSha<T extends { path: string; size: number }>(
+  files: T[],
+  existingBlobShas: Map<string, string>,
+  getSha: (file: T) => string
+): FileComparison<T> {
+  const changedFiles: T[] = [];
+  const unchangedFiles: T[] = [];
+
+  for (const file of files) {
+    if (existingBlobShas.get(file.path) === getSha(file)) {
+      unchangedFiles.push(file);
+    } else {
+      changedFiles.push(file);
+    }
+  }
+
+  return {
+    changedFiles,
+    unchangedFiles,
+    changedFilesCount: changedFiles.length,
+    unchangedFilesCount: unchangedFiles.length,
+    changedBytes: changedFiles.reduce((total, file) => total + file.size, 0),
+    unchangedBytes: unchangedFiles.reduce((total, file) => total + file.size, 0)
+  };
+}
+
+async function deleteBranchRef(token: string, owner: string, repo: string, branchName: string): Promise<void> {
+  await githubRequest(token, `/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branchName)}`, {
+    method: "DELETE"
+  });
+}
+
 function splitPersonalRepo(repoFullName: string, userLogin: string): { owner: string; repo: string } {
   const [owner, repo] = repoFullName.split("/");
   if (!owner || !repo || owner !== userLogin) {
@@ -504,6 +674,12 @@ function isSafeBranchName(branchName: string): boolean {
     value.includes("@{") ||
     value.endsWith(".lock")
   );
+}
+
+function calculateGitBlobSha(content: string): string {
+  const contentBuffer = Buffer.from(content, "utf8");
+  const header = Buffer.from(`blob ${contentBuffer.length}\0`, "utf8");
+  return crypto.createHash("sha1").update(Buffer.concat([header, contentBuffer])).digest("hex");
 }
 
 function toRepository(repo: GitHubRepoResponse): GitHubRepository {

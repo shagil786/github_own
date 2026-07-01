@@ -27,6 +27,25 @@ export type UploadFilePayload = {
   size: number;
 };
 
+export type FileMetadata = {
+  path: string;
+  size: number;
+};
+
+export type CompareFilePayload = FileMetadata & {
+  sha: string;
+};
+
+export type CompareFilesResult = {
+  baseBranch: string;
+  changedFiles: FileMetadata[];
+  unchangedFiles: FileMetadata[];
+  changedFilesCount: number;
+  unchangedFilesCount: number;
+  changedBytes: number;
+  unchangedBytes: number;
+};
+
 export type CreatePullRequestPayload = {
   repoFullName: string;
   branchName: string;
@@ -41,4 +60,6 @@ export type CreatePullRequestResult = {
   commitSha: string;
   pullRequestUrl: string;
   pullRequestNumber: number;
+  uploadedFilesCount?: number;
+  unchangedFilesCount?: number;
 };

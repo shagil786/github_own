@@ -6,10 +6,17 @@ import {
   validateCommitPath
 } from "@/lib/security/pathRules";
 import { scanTextForSecrets } from "@/lib/security/secretScan";
-import type { CreatePullRequestPayload, UploadFilePayload } from "@/lib/types";
+import type { CompareFilePayload, CreatePullRequestPayload, UploadFilePayload } from "@/lib/types";
 import { optionalNumberEnv } from "@/lib/server/env";
 
 export type ValidatedUpload = CreatePullRequestPayload & {
+  totalBytes: number;
+};
+
+export type ValidatedCompareFiles = {
+  repoFullName: string;
+  baseBranch?: string;
+  files: CompareFilePayload[];
   totalBytes: number;
 };
 
@@ -103,6 +110,90 @@ export function validateUploadPayload(input: unknown): ValidatedUpload {
     baseBranch: baseBranch?.trim(),
     commitMessage: commitMessage.trim(),
     draft: input.draft === true,
+    files: sanitizedFiles,
+    totalBytes
+  };
+}
+
+export function validateCompareFilesPayload(input: unknown): ValidatedCompareFiles {
+  if (!isRecord(input)) {
+    throw new Error("Invalid JSON payload");
+  }
+
+  const repoFullName = readString(input, "repoFullName");
+  const baseBranch = readOptionalString(input, "baseBranch");
+  const files = input.files;
+
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repoFullName)) {
+    throw new Error("Repository must be a personal repo full name like owner/name");
+  }
+
+  if (baseBranch && !isSafeBranchName(baseBranch)) {
+    throw new Error("Base branch contains unsafe characters or unsupported Git syntax");
+  }
+
+  if (!Array.isArray(files) || files.length === 0) {
+    throw new Error("No files were provided for comparison");
+  }
+
+  const maxFiles = optionalNumberEnv("MAX_FILES", DEFAULT_MAX_FILES);
+  if (files.length > maxFiles) {
+    throw new Error(`Too many files. Limit is ${maxFiles}`);
+  }
+
+  const maxFileSize = optionalNumberEnv("MAX_FILE_SIZE_BYTES", DEFAULT_MAX_FILE_SIZE_BYTES);
+  const maxTotalBytes = optionalNumberEnv("MAX_TOTAL_UPLOAD_BYTES", DEFAULT_MAX_TOTAL_UPLOAD_BYTES);
+  const seenPaths = new Set<string>();
+  const sanitizedFiles: CompareFilePayload[] = [];
+  let totalBytes = 0;
+
+  for (const file of files) {
+    if (!isRecord(file)) {
+      throw new Error("Each file must be an object");
+    }
+
+    const path = readString(file, "path");
+    const sha = readString(file, "sha").toLowerCase();
+    const size = typeof file.size === "number" && Number.isFinite(file.size) && file.size >= 0 ? file.size : -1;
+    const validation = validateCommitPath(path);
+
+    if (!validation.ok) {
+      throw new Error(`${path}: ${validation.reason}`);
+    }
+
+    if (size < 0) {
+      throw new Error(`${validation.path}: invalid file size`);
+    }
+
+    if (!/^[a-f0-9]{40}$/.test(sha)) {
+      throw new Error(`${validation.path}: invalid Git blob SHA`);
+    }
+
+    if (seenPaths.has(validation.path)) {
+      throw new Error(`${validation.path}: duplicate file path`);
+    }
+    seenPaths.add(validation.path);
+
+    const decision = evaluateFileDecision(validation.path, size, maxFileSize);
+    if (decision.action !== "commit") {
+      throw new Error(`${validation.path}: ${decision.reason ?? "file is not allowed"}`);
+    }
+
+    totalBytes += size;
+    if (totalBytes > maxTotalBytes) {
+      throw new Error(`Comparison is too large. Total limit is ${maxTotalBytes} bytes`);
+    }
+
+    sanitizedFiles.push({
+      path: validation.path,
+      sha,
+      size
+    });
+  }
+
+  return {
+    repoFullName,
+    baseBranch: baseBranch?.trim(),
     files: sanitizedFiles,
     totalBytes
   };
