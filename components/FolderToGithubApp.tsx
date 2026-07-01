@@ -3,6 +3,7 @@
 import {
   CheckCircle2,
   Download,
+  ExternalLink,
   FileText,
   FolderOpen,
   GitBranch,
@@ -31,7 +32,15 @@ import {
   stripTopLevelFolder
 } from "@/lib/security/pathRules";
 import { type SecretIssue, scanTextForSecrets } from "@/lib/security/secretScan";
-import type { AuthenticatedUser, CreatePullRequestResult, GitHubRepository, UploadFilePayload } from "@/lib/types";
+import type {
+  AuthenticatedUser,
+  CompareFilePayload,
+  CompareFilesResult,
+  CreatePullRequestResult,
+  FileMetadata,
+  GitHubRepository,
+  UploadFilePayload
+} from "@/lib/types";
 
 type AuthState =
   | { loading: true; authenticated: false; githubConfigured: false; user?: never }
@@ -98,6 +107,7 @@ export function FolderToGithubApp() {
   const [fileDisplayLimit, setFileDisplayLimit] = useState(120);
   const [scanError, setScanError] = useState("");
   const [isScanning, setIsScanning] = useState(false);
+  const [isComparingFiles, setIsComparingFiles] = useState(false);
   const [isCreatingPr, setIsCreatingPr] = useState(false);
   const [isCreatingRepo, setIsCreatingRepo] = useState(false);
   const [isInitializingRepo, setIsInitializingRepo] = useState(false);
@@ -105,6 +115,8 @@ export function FolderToGithubApp() {
   const [authError, setAuthError] = useState("");
   const [repoMessage, setRepoMessage] = useState("");
   const [repoError, setRepoError] = useState("");
+  const [remoteDiffError, setRemoteDiffError] = useState("");
+  const [remoteDiff, setRemoteDiff] = useState<CompareFilesResult | null>(null);
   const [result, setResult] = useState<CreatePullRequestResult | null>(null);
 
   useEffect(() => {
@@ -142,10 +154,20 @@ export function FolderToGithubApp() {
     [fileDisplayLimit, filteredReviewFiles]
   );
   const selectedRepoData = repos.find((repo) => repo.fullName === selectedRepo);
+  const deployBranchName = result?.branchName || baseBranch;
+  const vercelDeployUrl = selectedRepo && deployBranchName ? buildVercelDeployUrl(selectedRepo, deployBranchName) : "";
   const branchError = getBranchNameError(branchName);
   const commitMessageError = getCommitMessageError(commitMessage);
   const duplicateRepo = repos.find((repo) => repo.name.toLowerCase() === newRepoName.trim().toLowerCase());
-  const createPrDisabledReason = getCreatePrDisabledReason(
+  const compareDisabledReason = getCompareDisabledReason(
+    auth.authenticated,
+    isComparingFiles,
+    filesToCommit.length,
+    blockedFiles.length,
+    selectedRepo,
+    baseBranch
+  );
+  const baseCreatePrDisabledReason = getCreatePrDisabledReason(
     auth.authenticated,
     isCreatingPr,
     filesToCommit.length,
@@ -155,6 +177,17 @@ export function FolderToGithubApp() {
     branchError,
     commitMessageError
   );
+  const createPrDisabledReason =
+    baseCreatePrDisabledReason ??
+    (remoteDiff?.changedFilesCount === 0
+      ? `No changed files were found compared with ${remoteDiff.baseBranch}. Nothing needs to be uploaded.`
+      : null);
+  const filesPreviewValue = remoteDiff
+    ? `${remoteDiff.changedFilesCount} changed, ${remoteDiff.unchangedFilesCount} unchanged skipped`
+    : `${filesToCommit.length} approved locally, compare to narrow`;
+  const createPrStatus = createPrDisabledReason ?? (remoteDiff
+    ? `${remoteDiff.changedFilesCount} changed files, ${formatBytes(remoteDiff.changedBytes)}`
+    : `${filesToCommit.length} approved local files, ${formatBytes(totalCommitBytes)}`);
 
   const workflowSteps = getWorkflowSteps({
     authenticated: auth.authenticated,
@@ -175,6 +208,11 @@ export function FolderToGithubApp() {
 
     void loadBranches(selectedRepo);
   }, [auth.authenticated, selectedRepo]);
+
+  useEffect(() => {
+    setRemoteDiff(null);
+    setRemoteDiffError("");
+  }, [baseBranch, reviewedFiles, selectedRepo]);
 
   async function refreshAuth() {
     setAuth({ loading: true, authenticated: false, githubConfigured: false });
@@ -278,6 +316,8 @@ export function FolderToGithubApp() {
     setResult(null);
     setApiError("");
     setScanError("");
+    setRemoteDiff(null);
+    setRemoteDiffError("");
     setFileFilter("all");
     setFileSearch("");
     setFileDisplayLimit(120);
@@ -392,6 +432,65 @@ export function FolderToGithubApp() {
     }
   }
 
+  function buildApprovedFilePayloads(): UploadFilePayload[] {
+    return filesToCommit.map((file) => ({
+      path: file.path,
+      content: file.content ?? "",
+      size: file.size
+    }));
+  }
+
+  async function buildCompareFilePayloads(): Promise<CompareFilePayload[]> {
+    return Promise.all(
+      filesToCommit.map(async (file) => ({
+        path: file.path,
+        sha: await calculateBrowserGitBlobSha(file.content ?? ""),
+        size: file.size
+      }))
+    );
+  }
+
+  function buildPullRequestFilePayloads(): UploadFilePayload[] {
+    const files = buildApprovedFilePayloads();
+    if (!remoteDiff || remoteDiff.changedFilesCount === 0) {
+      return files;
+    }
+
+    const changedPaths = new Set(remoteDiff.changedFiles.map((file) => file.path));
+    return files.filter((file) => changedPaths.has(file.path));
+  }
+
+  async function compareWithGitHub() {
+    setApiError("");
+    setRemoteDiffError("");
+    setRemoteDiff(null);
+
+    if (compareDisabledReason) {
+      setRemoteDiffError(compareDisabledReason);
+      return;
+    }
+
+    setIsComparingFiles(true);
+    try {
+      const response = await fetch("/api/github/compare-files", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          repoFullName: selectedRepo,
+          baseBranch,
+          files: await buildCompareFilePayloads()
+        })
+      });
+
+      const data = await readJsonResponse<CompareFilesResult>(response, "Unable to compare files with GitHub");
+      setRemoteDiff(data);
+    } catch (error) {
+      setRemoteDiffError(error instanceof Error ? error.message : "Unable to compare files with GitHub");
+    } finally {
+      setIsComparingFiles(false);
+    }
+  }
+
   async function createPullRequest() {
     setApiError("");
     setResult(null);
@@ -406,11 +505,10 @@ export function FolderToGithubApp() {
       return;
     }
 
-    const files: UploadFilePayload[] = filesToCommit.map((file) => ({
-      path: file.path,
-      content: file.content ?? "",
-      size: file.size
-    }));
+    if (remoteDiff?.changedFilesCount === 0) {
+      setApiError(`No changed files were found compared with ${remoteDiff.baseBranch}. Nothing needs to be uploaded.`);
+      return;
+    }
 
     setIsCreatingPr(true);
     try {
@@ -423,7 +521,7 @@ export function FolderToGithubApp() {
           branchName,
           commitMessage,
           draft: draftPr,
-          files
+          files: buildPullRequestFilePayloads()
         })
       });
 
@@ -577,6 +675,23 @@ export function FolderToGithubApp() {
             <SettingsIcon size={16} aria-hidden="true" />
             Settings
           </Link>
+          {vercelDeployUrl ? (
+            <a
+              className="secondaryButton"
+              href={vercelDeployUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={`Deploy ${selectedRepo} branch ${deployBranchName} to Vercel`}
+            >
+              <ExternalLink size={16} aria-hidden="true" />
+              Deploy branch
+            </a>
+          ) : (
+            <button className="secondaryButton" type="button" disabled>
+              <ExternalLink size={16} aria-hidden="true" />
+              Deploy
+            </button>
+          )}
         </div>
       </div>
 
@@ -656,7 +771,7 @@ export function FolderToGithubApp() {
 
       {reviewedFiles.length ? (
         <div className="statsGrid" aria-label="Folder review summary">
-          <Stat label="Files to commit" value={filesToCommit.length} tone="good" />
+          <Stat label="Approved local" value={filesToCommit.length} tone="good" />
           <Stat label="Ignored" value={ignoredFiles.length} tone="neutral" />
           <Stat label="Skipped" value={skippedFiles.length} tone="warn" />
           <Stat label="Blocked" value={blockedFiles.length} tone="bad" />
@@ -726,7 +841,7 @@ export function FolderToGithubApp() {
             )}
           </Section>
 
-          <Section title="Files to commit" description="Only these text files are sent to the server during PR creation.">
+          <Section title="Approved local files" description="These files passed local ignore rules and secret scanning. Use the GitHub comparison below to see which ones changed.">
             <FileList title="Approved files" files={filesToCommit} empty="No approved files." />
           </Section>
         </>
@@ -899,16 +1014,74 @@ export function FolderToGithubApp() {
         {repoMessage ? <div className="successInline" role="status" aria-live="polite">{repoMessage}</div> : null}
       </Section>
 
+      <Section title="Changed file check" description="Compare approved local files with the selected GitHub base branch before creating the pull request.">
+        <div className="compareHeader">
+          <div>
+            <strong>Remote comparison</strong>
+            <p>Only paths, sizes, and Git blob hashes are sent for this check. File contents are uploaded later only for changed files.</p>
+          </div>
+          <button
+            className="secondaryButton"
+            type="button"
+            onClick={compareWithGitHub}
+            disabled={Boolean(compareDisabledReason)}
+          >
+            {isComparingFiles ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}
+            {isComparingFiles ? "Comparing" : "Compare with GitHub"}
+          </button>
+        </div>
+
+        {remoteDiffError ? <p className="errorText" role="alert">{remoteDiffError}</p> : null}
+
+        {remoteDiff ? (
+          <>
+            {remoteDiff.changedFilesCount > 0 ? (
+              <div className="safeState">
+                <CheckCircle2 size={18} aria-hidden="true" />
+                {remoteDiff.changedFilesCount} changed files will be committed. {remoteDiff.unchangedFilesCount} unchanged files will be skipped.
+              </div>
+            ) : (
+              <div className="softNotice">
+                No changed files were found compared with {remoteDiff.baseBranch}. Nothing needs to be uploaded.
+              </div>
+            )}
+            <div className="statsGrid compactStats" aria-label="GitHub comparison summary">
+              <Stat label="Changed" value={remoteDiff.changedFilesCount} tone="good" />
+              <Stat label="Unchanged" value={remoteDiff.unchangedFilesCount} tone="neutral" />
+              <Stat label="Changed size" value={formatBytes(remoteDiff.changedBytes)} tone="neutral" />
+              <Stat label="Base branch" value={remoteDiff.baseBranch} tone="neutral" />
+            </div>
+            <div className="twoColumn compareLists">
+              <MetadataFileList title="Changed files" files={remoteDiff.changedFiles} empty="No changed files." />
+              <MetadataFileList title="Unchanged files" files={remoteDiff.unchangedFiles} empty="No unchanged files." />
+            </div>
+          </>
+        ) : (
+          <div className="softNotice">
+            Run the comparison to see changed files before uploading contents. If you skip it, the final PR route still filters unchanged files on the server.
+          </div>
+        )}
+      </Section>
+
       <Section title="Pull request preview" description="Review the GitHub side effect before creating anything.">
         <div className="previewGrid">
           <PreviewItem icon={<Github size={16} aria-hidden="true" />} label="Repository" value={selectedRepo || "Choose a repository"} />
           <PreviewItem icon={<GitBranch size={16} aria-hidden="true" />} label="Base branch" value={baseBranch || "Choose a base branch"} />
           <PreviewItem icon={<GitPullRequest size={16} aria-hidden="true" />} label="New branch" value={branchName || "Enter a branch"} />
           <PreviewItem icon={<FileText size={16} aria-hidden="true" />} label="Commit" value={commitMessage || "Enter a commit message"} />
-          <PreviewItem label="Files" value={`${filesToCommit.length} files, ${formatBytes(totalCommitBytes)}`} />
+          <PreviewItem label="Files" value={filesPreviewValue} />
           <PreviewItem label="Review" value={`${ignoredFiles.length} ignored, ${skippedFiles.length} skipped, ${blockedFiles.length} blocked`} />
           <PreviewItem label="Mode" value={draftPr ? "Draft pull request" : "Ready for review"} />
         </div>
+        {vercelDeployUrl ? (
+          <div className="actionRow compactActionRow">
+            <a className="secondaryButton" href={vercelDeployUrl} target="_blank" rel="noreferrer">
+              <ExternalLink size={16} aria-hidden="true" />
+              Deploy {deployBranchName} to Vercel
+            </a>
+            <span className="mutedText">Uses the selected repository and branch, not a hardcoded template repo.</span>
+          </div>
+        ) : null}
         {createPrDisabledReason ? (
           <div className="softNotice">{createPrDisabledReason}</div>
         ) : (
@@ -931,7 +1104,7 @@ export function FolderToGithubApp() {
           Create pull request
         </button>
         <span className="mutedText" id="create-pr-status">
-          {createPrDisabledReason ?? `${filesToCommit.length} files, ${formatBytes(totalCommitBytes)}`}
+          {createPrStatus}
         </span>
       </div>
 
@@ -946,6 +1119,12 @@ export function FolderToGithubApp() {
             <h2>Pull request created</h2>
             <p>
               Branch <code>{result.branchName}</code> was created and committed as <code>{result.commitSha.slice(0, 8)}</code>.
+              {typeof result.uploadedFilesCount === "number" ? (
+                <>
+                  {" "}Uploaded {result.uploadedFilesCount} changed files
+                  {result.unchangedFilesCount ? ` and skipped ${result.unchangedFilesCount} unchanged files` : ""}.
+                </>
+              ) : null}
             </p>
             <a className="primaryButton" href={result.pullRequestUrl} target="_blank" rel="noreferrer">
               <UploadCloud size={18} aria-hidden="true" />
@@ -984,6 +1163,29 @@ function FileList({ title, files, empty }: { title: string; files: ReviewedFile[
                 {file.issues?.length ? (
                   <span>{file.issues.map((issue) => issue.reason).join(" ")}</span>
                 ) : null}
+              </div>
+              <small>{formatBytes(file.size)}</small>
+            </li>
+          ))}
+        </ul>
+      )}
+      {files.length > 120 ? <p className="mutedText">Showing 120 of {files.length} files.</p> : null}
+    </div>
+  );
+}
+
+function MetadataFileList({ title, files, empty }: { title: string; files: FileMetadata[]; empty: string }) {
+  return (
+    <div className="fileList">
+      <h3>{title}</h3>
+      {files.length === 0 ? (
+        <p className="mutedText">{empty}</p>
+      ) : (
+        <ul>
+          {files.slice(0, 120).map((file) => (
+            <li key={file.path}>
+              <div>
+                <strong>{file.path}</strong>
               </div>
               <small>{formatBytes(file.size)}</small>
             </li>
@@ -1079,6 +1281,22 @@ async function looksBinary(file: File): Promise<boolean> {
   return sample.includes(0);
 }
 
+async function calculateBrowserGitBlobSha(content: string): Promise<string> {
+  if (!crypto.subtle) {
+    throw new Error("Your browser does not support secure file comparison. Create the pull request directly to let the server compare files.");
+  }
+
+  const encoder = new TextEncoder();
+  const contentBytes = encoder.encode(content);
+  const headerBytes = encoder.encode(`blob ${contentBytes.byteLength}\0`);
+  const payload = new Uint8Array(headerBytes.byteLength + contentBytes.byteLength);
+  payload.set(headerBytes, 0);
+  payload.set(contentBytes, headerBytes.byteLength);
+  const digest = await crypto.subtle.digest("SHA-1", payload);
+
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function sortReviewedFiles(files: ReviewedFile[]): ReviewedFile[] {
   const rank: Record<ReviewStatus, number> = {
     blocked: 0,
@@ -1098,6 +1316,17 @@ function slugify(value: string): string {
     .slice(0, 40) || "project";
 }
 
+function buildVercelDeployUrl(repoFullName: string, branchName: string): string {
+  const url = new URL("https://vercel.com/new/clone");
+  const githubTreeUrl = `https://github.com/${repoFullName}/tree/${branchName}`;
+  const repoName = repoFullName.split("/")[1] ?? "project";
+
+  url.searchParams.set("repository-url", githubTreeUrl);
+  url.searchParams.set("project-name", repoName);
+  url.searchParams.set("repository-name", repoName);
+  return url.toString();
+}
+
 function timestampSlug(): string {
   return new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
 }
@@ -1105,6 +1334,35 @@ function timestampSlug(): string {
 function isSafeRepositoryName(name: string): boolean {
   const trimmed = name.trim();
   return /^[A-Za-z0-9._-]{1,100}$/.test(trimmed) && !trimmed.startsWith(".") && !trimmed.endsWith(".");
+}
+
+function getCompareDisabledReason(
+  authenticated: boolean,
+  comparing: boolean,
+  fileCount: number,
+  blockedCount: number,
+  repoFullName: string,
+  baseBranch: string
+): string | null {
+  if (comparing) {
+    return "Comparing files with GitHub...";
+  }
+  if (!authenticated) {
+    return "Connect GitHub first.";
+  }
+  if (blockedCount > 0) {
+    return "Resolve blocked secret scan results.";
+  }
+  if (fileCount === 0) {
+    return "Select a folder with approved files.";
+  }
+  if (!repoFullName) {
+    return "Choose a GitHub repository.";
+  }
+  if (!baseBranch) {
+    return "Choose a base branch.";
+  }
+  return null;
 }
 
 function getCreatePrDisabledReason(
@@ -1233,7 +1491,7 @@ function getWorkflowSteps({
 
 function statusLabel(status: ReviewStatus): string {
   return {
-    commit: "To commit",
+    commit: "Approved",
     ignored: "Ignored",
     skipped: "Skipped",
     blocked: "Blocked"

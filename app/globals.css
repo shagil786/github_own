@@ -431,6 +431,35 @@ select:focus-visible,
   gap: 12px;
 }
 
+.compareHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.compareHeader strong {
+  display: block;
+  margin-bottom: 3px;
+  line-height: 1.25;
+}
+
+.compareHeader p {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 0.93rem;
+  line-height: 1.42;
+}
+
+.compactStats {
+  margin-top: 12px;
+}
+
+.compareLists {
+  margin-top: 12px;
+}
+
 .reviewToolbar {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) auto;
@@ -1027,6 +1056,7 @@ code {
   .formGrid,
   .twoColumn,
   .threeFieldGrid,
+  .compareHeader,
   .reviewToolbar,
   .previewGrid,
   .repoCreatorHeader,
