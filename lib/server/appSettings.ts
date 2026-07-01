@@ -6,7 +6,8 @@ import path from "node:path";
 const DATA_DIR = path.join(process.cwd(), ".app-data");
 const KEY_FILE = path.join(DATA_DIR, "settings.key");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.enc");
-const DEFAULT_REDIS_SETTINGS_KEY = "folder-to-github:settings";
+const DEFAULT_SETTINGS_STORAGE_KEY = "folder-to-github:settings";
+const DEFAULT_SUPABASE_SETTINGS_TABLE = "app_settings";
 
 type StoredSettings = {
   authMode?: AuthMode;
@@ -44,7 +45,8 @@ export type PublicSettings = {
   settingsAdminRequired: boolean;
   settingsAdminConfigured: boolean;
   hasSettingsAdminKey: boolean;
-  settingsStorage: "redis" | "filesystem";
+  settingsStorage: "supabase" | "redis" | "filesystem";
+  supabaseSettingsConfigured: boolean;
   redisSettingsConfigured: boolean;
   vercelBlobDetected: boolean;
   blobReadWriteTokenConfigured: boolean;
@@ -88,7 +90,8 @@ export async function readPublicSettings(): Promise<PublicSettings> {
     settingsAdminRequired: runtimeSettingsAdminRequired(),
     settingsAdminConfigured: runtimeSettingsAdminConfigured(),
     hasSettingsAdminKey: hasSettingsAdminKey(),
-    settingsStorage: redisSettingsConfigured() ? "redis" : "filesystem",
+    settingsStorage: settingsStorageKind(),
+    supabaseSettingsConfigured: supabaseSettingsConfigured(),
     redisSettingsConfigured: redisSettingsConfigured(),
     vercelBlobDetected: vercelBlobDetected(),
     blobReadWriteTokenConfigured: blobReadWriteTokenConfigured(),
@@ -226,6 +229,10 @@ export function redisSettingsConfigured(): boolean {
   return Boolean(redisSettingsConfig());
 }
 
+export function supabaseSettingsConfigured(): boolean {
+  return Boolean(supabaseSettingsConfig());
+}
+
 export function vercelBlobDetected(): boolean {
   return Boolean(process.env.BLOB_STORE_ID || process.env.BLOB_WEBHOOK_PUBLIC_KEY || process.env.BLOB_READ_WRITE_TOKEN);
 }
@@ -247,9 +254,15 @@ function settingsEncryptionConfigured(): boolean {
 }
 
 async function readStoredSettings(): Promise<StoredSettings> {
+  const supabase = supabaseSettingsConfig();
+  if (supabase) {
+    const payload = await supabaseGet(supabase, settingsStorageKey());
+    return payload ? JSON.parse(decrypt(payload)) as StoredSettings : {};
+  }
+
   const redis = redisSettingsConfig();
   if (redis) {
-    const payload = await redisGet(redis, redisSettingsKey());
+    const payload = await redisGet(redis, settingsStorageKey());
     return payload ? JSON.parse(decrypt(payload)) as StoredSettings : {};
   }
 
@@ -266,9 +279,15 @@ async function readStoredSettings(): Promise<StoredSettings> {
 
 async function writeStoredSettings(settings: StoredSettings): Promise<void> {
   const payload = encrypt(JSON.stringify(settings));
+  const supabase = supabaseSettingsConfig();
+  if (supabase) {
+    await supabaseSet(supabase, settingsStorageKey(), payload);
+    return;
+  }
+
   const redis = redisSettingsConfig();
   if (redis) {
-    await redisSet(redis, redisSettingsKey(), payload);
+    await redisSet(redis, settingsStorageKey(), payload);
     return;
   }
 
@@ -385,6 +404,47 @@ type RedisResponse<T> = {
   error?: string;
 };
 
+type SupabaseSettingsConfig = {
+  restUrl: string;
+  serviceKey: string;
+  table: string;
+};
+
+type SupabaseSettingsRow = {
+  id: string;
+  encrypted_payload: string;
+  updated_at?: string;
+};
+
+function settingsStorageKind(): PublicSettings["settingsStorage"] {
+  if (supabaseSettingsConfigured()) {
+    return "supabase";
+  }
+  if (redisSettingsConfigured()) {
+    return "redis";
+  }
+  return "filesystem";
+}
+
+function supabaseSettingsConfig(): SupabaseSettingsConfig | null {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
+  if (!supabaseUrl || !serviceKey) {
+    return null;
+  }
+
+  const table = process.env.SUPABASE_SETTINGS_TABLE || DEFAULT_SUPABASE_SETTINGS_TABLE;
+  if (!isSafeIdentifier(table)) {
+    throw new Error("SUPABASE_SETTINGS_TABLE must be a simple table name.");
+  }
+
+  return {
+    restUrl: `${supabaseUrl.replace(/\/$/, "")}/rest/v1`,
+    serviceKey,
+    table
+  };
+}
+
 function redisSettingsConfig(): RedisSettingsConfig | null {
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -397,8 +457,67 @@ function redisSettingsConfig(): RedisSettingsConfig | null {
   };
 }
 
-function redisSettingsKey(): string {
-  return process.env.SETTINGS_REDIS_KEY || DEFAULT_REDIS_SETTINGS_KEY;
+function settingsStorageKey(): string {
+  return process.env.SETTINGS_STORAGE_KEY || process.env.SETTINGS_REDIS_KEY || DEFAULT_SETTINGS_STORAGE_KEY;
+}
+
+async function supabaseGet(config: SupabaseSettingsConfig, key: string): Promise<string | null> {
+  const url = new URL(`${config.restUrl}/${config.table}`);
+  url.searchParams.set("id", `eq.${key}`);
+  url.searchParams.set("select", "id,encrypted_payload,updated_at");
+  url.searchParams.set("limit", "1");
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: supabaseHeaders(config),
+    cache: "no-store"
+  });
+  const data = await response.json().catch(() => null) as SupabaseSettingsRow[] | { message?: string } | null;
+
+  if (!response.ok) {
+    throw new Error(supabaseErrorMessage(data, response.status));
+  }
+
+  return Array.isArray(data) && data[0]?.encrypted_payload ? data[0].encrypted_payload : null;
+}
+
+async function supabaseSet(config: SupabaseSettingsConfig, key: string, value: string): Promise<void> {
+  const url = new URL(`${config.restUrl}/${config.table}`);
+  url.searchParams.set("on_conflict", "id");
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      ...supabaseHeaders(config),
+      Prefer: "resolution=merge-duplicates,return=minimal"
+    },
+    body: JSON.stringify({
+      id: key,
+      encrypted_payload: value,
+      updated_at: new Date().toISOString()
+    } satisfies SupabaseSettingsRow),
+    cache: "no-store"
+  });
+  const data = await response.json().catch(() => null) as { message?: string } | null;
+
+  if (!response.ok) {
+    throw new Error(supabaseErrorMessage(data, response.status));
+  }
+}
+
+function supabaseHeaders(config: SupabaseSettingsConfig): HeadersInit {
+  return {
+    apikey: config.serviceKey,
+    Authorization: `Bearer ${config.serviceKey}`,
+    "Content-Type": "application/json"
+  };
+}
+
+function supabaseErrorMessage(data: unknown, status: number): string {
+  if (data && typeof data === "object" && "message" in data && typeof data.message === "string") {
+    return data.message;
+  }
+  return `Supabase settings store request failed with ${status}`;
 }
 
 async function redisGet(config: RedisSettingsConfig, key: string): Promise<string | null> {
@@ -430,6 +549,10 @@ async function redisCommand<T>(config: RedisSettingsConfig, command: unknown[]):
 
 function isMissingFileError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+function isSafeIdentifier(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
 }
 
 function isEnabledEnv(value: string | undefined): boolean {

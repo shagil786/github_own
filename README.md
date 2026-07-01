@@ -135,15 +135,17 @@ When runtime settings are disabled, the Settings page is read-only and shows whi
 Production browser-based Settings setup:
 
 - `SETTINGS_ADMIN_KEY`, at least 16 characters
-- Redis/Upstash REST variables: either `KV_REST_API_URL` and `KV_REST_API_TOKEN`, or `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`
+- Supabase server-only variables: `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY`
 
 When `SETTINGS_ADMIN_KEY` is present in production, the Settings page becomes writable after redeploy and requires the setup key before saving. The GitHub token is then saved by the app instead of being read from `GITHUB_TOKEN`. `ALLOW_RUNTIME_SETTINGS=true` is still accepted as an explicit override, but it is not required when the setup key is configured.
 
 `SETTINGS_ENCRYPTION_KEY` is optional. If omitted, the app derives the encryption key from `SETTINGS_ADMIN_KEY`. Set a separate `SETTINGS_ENCRYPTION_KEY` only if you want to rotate the setup key independently from encrypted saved settings.
 
-When Redis/Upstash REST variables are present, saved runtime settings are encrypted and stored in Redis under `SETTINGS_REDIS_KEY` (default `folder-to-github:settings`). Without Redis, runtime settings fall back to `.app-data`, which is fine locally or on a persistent server but may not persist on serverless hosting.
+Create the Supabase settings table by running [supabase/settings-schema.sql](/Users/mnizami/Documents/Codex/2026-07-01/build-a-secure-browser-based-folder/supabase/settings-schema.sql) in the Supabase SQL editor. Saved runtime settings are encrypted before being stored in the `app_settings` table under `SETTINGS_STORAGE_KEY` (default `folder-to-github:settings`). Keep `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, database passwords, and Postgres URLs server-only. Never use `NEXT_PUBLIC_` for those values.
 
-Vercel Blob variables such as `BLOB_STORE_ID` and `BLOB_WEBHOOK_PUBLIC_KEY` do not give the app a writable settings store. They identify the Blob store / webhook verification path, but writing or overwriting a settings object would require `BLOB_READ_WRITE_TOKEN` and a Blob-backed storage implementation. This app currently uses Redis/Upstash REST for durable runtime Settings storage in production.
+Redis/Upstash is still supported as a fallback with either `KV_REST_API_URL` and `KV_REST_API_TOKEN`, or `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. Without Supabase or Redis, runtime settings fall back to `.app-data`, which is fine locally or on a persistent server but may not persist on serverless hosting.
+
+Vercel Blob variables such as `BLOB_STORE_ID` and `BLOB_WEBHOOK_PUBLIC_KEY` do not give the app a writable settings store. They identify the Blob store / webhook verification path, but writing or overwriting a settings object would require `BLOB_READ_WRITE_TOKEN` and a Blob-backed storage implementation. This app currently uses Supabase first, then Redis/Upstash as a fallback, for durable runtime Settings storage in production.
 
 Vercel Functions currently limit request and response bodies to 4.5 MB. Keep `MAX_TOTAL_UPLOAD_BYTES` below that practical payload size for hosted Vercel deployments, or use this app locally/self-hosted for larger folder uploads.
 
