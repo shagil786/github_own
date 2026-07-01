@@ -19,7 +19,8 @@ type PublicSettings = {
   settingsAdminRequired: boolean;
   settingsAdminConfigured: boolean;
   hasSettingsAdminKey: boolean;
-  settingsStorage: "redis" | "filesystem";
+  settingsStorage: "supabase" | "redis" | "filesystem";
+  supabaseSettingsConfigured: boolean;
   redisSettingsConfigured: boolean;
   vercelBlobDetected: boolean;
   blobReadWriteTokenConfigured: boolean;
@@ -28,7 +29,7 @@ type PublicSettings = {
 };
 
 const PRODUCTION_RUNTIME_SETTINGS_HELP =
-  "Runtime Settings writes are disabled on this deployment. To save a GitHub key from this page, set SETTINGS_ADMIN_KEY in Vercel and redeploy. Add Redis/Upstash REST variables for durable storage.";
+  "Runtime Settings writes are disabled on this deployment. To save a GitHub key from this page, set SETTINGS_ADMIN_KEY in Vercel and redeploy. Add Supabase service-role storage for durable saved settings.";
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
@@ -272,23 +273,25 @@ export function SettingsPage() {
 
             <div className="settingsMeta">
               <ShieldCheck size={16} aria-hidden="true" />
-              {settings?.settingsStorage === "redis"
-                ? "Settings are encrypted and stored in Redis/Upstash."
-                : authMode === "token"
-                  ? "Use a fine-grained token for only the personal repositories this tool should access."
-                  : "Use this callback URL in your GitHub OAuth app settings."}
+              {settings?.settingsStorage === "supabase"
+                ? "Settings are encrypted and stored in Supabase."
+                : settings?.settingsStorage === "redis"
+                  ? "Settings are encrypted and stored in Redis/Upstash."
+                  : authMode === "token"
+                    ? "Use a fine-grained token for only the personal repositories this tool should access."
+                    : "Use this callback URL in your GitHub OAuth app settings."}
             </div>
 
-            {settings?.settingsAdminRequired && !settings.redisSettingsConfigured ? (
+            {settings?.settingsAdminRequired && settings.settingsStorage === "filesystem" ? (
               <div className="softNotice">
-                Redis/Upstash is not configured. Runtime settings will use filesystem storage, which may not persist on serverless hosts.
+                Durable settings storage is not configured. Runtime settings will use filesystem storage, which may not persist on serverless hosts.
               </div>
             ) : null}
 
-            {settings?.settingsAdminRequired && settings.vercelBlobDetected && !settings.redisSettingsConfigured ? (
+            {settings?.settingsAdminRequired && settings.vercelBlobDetected && settings.settingsStorage === "filesystem" ? (
               <div className="softNotice">
                 Vercel Blob variables were detected, but BLOB_STORE_ID and BLOB_WEBHOOK_PUBLIC_KEY do not provide a writable settings store.
-                Use Redis/Upstash REST variables for runtime Settings, or add BLOB_READ_WRITE_TOKEN before enabling Blob-backed storage.
+                Use Supabase service-role storage or Redis/Upstash REST variables for runtime Settings.
               </div>
             ) : null}
 
@@ -355,9 +358,14 @@ function ProductionEnvironmentSettings({ settings, callbackUrl }: { settings: Pu
         <EnvVarRow name="SETTINGS_ADMIN_KEY" configured={settings.hasSettingsAdminKey} detail="Required setup key for saving production Settings from the browser" />
         <EnvVarRow name="Settings encryption" configured={settings.hasSettingsEncryptionKey} detail="A separate SETTINGS_ENCRYPTION_KEY is optional when SETTINGS_ADMIN_KEY is set" />
         <EnvVarRow
+          name="Supabase settings store"
+          configured={settings.supabaseSettingsConfigured}
+          detail="Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY"
+        />
+        <EnvVarRow
           name="Redis/Upstash REST"
           configured={settings.redisSettingsConfigured}
-          detail="Set KV_REST_API_URL and KV_REST_API_TOKEN, or UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN"
+          detail="Optional fallback: KV_REST_API_URL and KV_REST_API_TOKEN, or UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN"
         />
       </div>
 
