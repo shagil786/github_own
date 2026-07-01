@@ -107,7 +107,7 @@ Environment variables from `.env.local` are still supported as a deployment fall
 
 ## Deploy to Vercel
 
-Inside the running app, the **Deploy branch** button is dynamic. It uses the currently selected GitHub repository and branch, or the newly created upload branch after a pull request is created.
+Inside the running app, the **Deploy** button is dynamic. It uses the currently selected GitHub repository and that repository's default branch, usually `main`, instead of the temporary upload branch created for a pull request.
 
 To deploy this tool itself, open Vercel's clone flow with the GitHub URL for the repository where you host this app:
 

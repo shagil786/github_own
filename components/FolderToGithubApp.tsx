@@ -154,7 +154,7 @@ export function FolderToGithubApp() {
     [fileDisplayLimit, filteredReviewFiles]
   );
   const selectedRepoData = repos.find((repo) => repo.fullName === selectedRepo);
-  const deployBranchName = result?.branchName || baseBranch;
+  const deployBranchName = selectedRepo ? selectedRepoData?.defaultBranch || "main" : "";
   const vercelDeployUrl = selectedRepo && deployBranchName ? buildVercelDeployUrl(selectedRepo, deployBranchName) : "";
   const branchError = getBranchNameError(branchName);
   const commitMessageError = getCommitMessageError(commitMessage);
@@ -681,10 +681,10 @@ export function FolderToGithubApp() {
               href={vercelDeployUrl}
               target="_blank"
               rel="noreferrer"
-              title={`Deploy ${selectedRepo} branch ${deployBranchName} to Vercel`}
+              title={`Deploy ${selectedRepo} default branch ${deployBranchName} to Vercel`}
             >
               <ExternalLink size={16} aria-hidden="true" />
-              Deploy branch
+              Deploy {deployBranchName}
             </a>
           ) : (
             <button className="secondaryButton" type="button" disabled>
@@ -1079,7 +1079,7 @@ export function FolderToGithubApp() {
               <ExternalLink size={16} aria-hidden="true" />
               Deploy {deployBranchName} to Vercel
             </a>
-            <span className="mutedText">Uses the selected repository and branch, not a hardcoded template repo.</span>
+            <span className="mutedText">Uses the selected repository default branch, usually main, not the temporary upload branch.</span>
           </div>
         ) : null}
         {createPrDisabledReason ? (
