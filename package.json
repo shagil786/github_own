@@ -1,0 +1,30 @@
+{
+  "name": "folder-to-github",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:unit && npm run test:github",
+    "test:unit": "node work/verify-upload-rules.cjs",
+    "test:github": "node work/verify-github-client.cjs",
+    "verify": "npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "next": "^16.2.9",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.12",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.5.4"
+  },
+  "overrides": {
+    "postcss": "^8.5.10"
+  }
+}
