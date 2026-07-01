@@ -6,6 +6,7 @@ import path from "node:path";
 const DATA_DIR = path.join(process.cwd(), ".app-data");
 const KEY_FILE = path.join(DATA_DIR, "settings.key");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.enc");
+const DEFAULT_REDIS_SETTINGS_KEY = "folder-to-github:settings";
 
 type StoredSettings = {
   authMode?: AuthMode;
@@ -36,8 +37,14 @@ export type PublicSettings = {
   hasPersonalAccessToken: boolean;
   hasSessionSecret: boolean;
   hasSettingsEncryptionKey: boolean;
+  serverTokenAuthAllowed: boolean;
   githubConfigured: boolean;
   runtimeSettingsAllowed: boolean;
+  settingsAdminRequired: boolean;
+  settingsAdminConfigured: boolean;
+  hasSettingsAdminKey: boolean;
+  settingsStorage: "redis" | "filesystem";
+  redisSettingsConfigured: boolean;
   missing: string[];
   updatedAt?: string;
 };
@@ -72,8 +79,14 @@ export async function readPublicSettings(): Promise<PublicSettings> {
     hasPersonalAccessToken: Boolean(effective.personalAccessToken),
     hasSessionSecret: Boolean(effective.sessionSecret),
     hasSettingsEncryptionKey: Boolean(process.env.SETTINGS_ENCRYPTION_KEY),
+    serverTokenAuthAllowed: process.env.ALLOW_SERVER_TOKEN_AUTH === "true",
     githubConfigured: missing.length === 0,
     runtimeSettingsAllowed: runtimeSettingsAllowed(),
+    settingsAdminRequired: runtimeSettingsAdminRequired(),
+    settingsAdminConfigured: runtimeSettingsAdminConfigured(),
+    hasSettingsAdminKey: Boolean(process.env.SETTINGS_ADMIN_KEY && process.env.SETTINGS_ADMIN_KEY.length >= 16),
+    settingsStorage: redisSettingsConfigured() ? "redis" : "filesystem",
+    redisSettingsConfigured: redisSettingsConfigured(),
     missing,
     updatedAt: stored.updatedAt
   };
@@ -179,7 +192,40 @@ export function runtimeSettingsAllowed(): boolean {
   return process.env.NODE_ENV !== "production" || process.env.ALLOW_RUNTIME_SETTINGS === "true";
 }
 
+export function runtimeSettingsAdminRequired(): boolean {
+  return process.env.NODE_ENV === "production" && runtimeSettingsAllowed();
+}
+
+export function runtimeSettingsAdminConfigured(): boolean {
+  return !runtimeSettingsAdminRequired() || Boolean(process.env.SETTINGS_ADMIN_KEY && process.env.SETTINGS_ADMIN_KEY.length >= 16);
+}
+
+export function verifyRuntimeSettingsAdminKey(value: string | null): boolean {
+  if (!runtimeSettingsAdminRequired()) {
+    return true;
+  }
+
+  const expected = process.env.SETTINGS_ADMIN_KEY;
+  if (!expected || expected.length < 16 || !value) {
+    return false;
+  }
+
+  const expectedBytes = Buffer.from(expected);
+  const valueBytes = Buffer.from(value);
+  return expectedBytes.length === valueBytes.length && crypto.timingSafeEqual(expectedBytes, valueBytes);
+}
+
+export function redisSettingsConfigured(): boolean {
+  return Boolean(redisSettingsConfig());
+}
+
 async function readStoredSettings(): Promise<StoredSettings> {
+  const redis = redisSettingsConfig();
+  if (redis) {
+    const payload = await redisGet(redis, redisSettingsKey());
+    return payload ? JSON.parse(decrypt(payload)) as StoredSettings : {};
+  }
+
   try {
     const payload = await readFile(SETTINGS_FILE, "utf8");
     return JSON.parse(decrypt(payload)) as StoredSettings;
@@ -192,8 +238,15 @@ async function readStoredSettings(): Promise<StoredSettings> {
 }
 
 async function writeStoredSettings(settings: StoredSettings): Promise<void> {
+  const payload = encrypt(JSON.stringify(settings));
+  const redis = redisSettingsConfig();
+  if (redis) {
+    await redisSet(redis, redisSettingsKey(), payload);
+    return;
+  }
+
   await mkdir(DATA_DIR, { recursive: true, mode: 0o700 });
-  await writeFile(SETTINGS_FILE, encrypt(JSON.stringify(settings)), { mode: 0o600 });
+  await writeFile(SETTINGS_FILE, payload, { mode: 0o600 });
 }
 
 function missingFromEffective(settings: EffectiveGithubSettings): string[] {
@@ -201,6 +254,9 @@ function missingFromEffective(settings: EffectiveGithubSettings): string[] {
   if (settings.authMode === "token") {
     if (!settings.personalAccessToken) {
       missing.push("GitHub personal access token");
+    }
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_SERVER_TOKEN_AUTH !== "true") {
+      missing.push("ALLOW_SERVER_TOKEN_AUTH=true");
     }
     return missing;
   }
@@ -286,6 +342,59 @@ function getOrCreateLocalSettingsKey(): Buffer {
     writeFileSync(KEY_FILE, key.toString("base64url"), { mode: 0o600 });
     return key;
   }
+}
+
+type RedisSettingsConfig = {
+  url: string;
+  token: string;
+};
+
+type RedisResponse<T> = {
+  result?: T;
+  error?: string;
+};
+
+function redisSettingsConfig(): RedisSettingsConfig | null {
+  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) {
+    return null;
+  }
+  return {
+    url: url.replace(/\/$/, ""),
+    token
+  };
+}
+
+function redisSettingsKey(): string {
+  return process.env.SETTINGS_REDIS_KEY || DEFAULT_REDIS_SETTINGS_KEY;
+}
+
+async function redisGet(config: RedisSettingsConfig, key: string): Promise<string | null> {
+  return redisCommand<string | null>(config, ["GET", key]);
+}
+
+async function redisSet(config: RedisSettingsConfig, key: string, value: string): Promise<void> {
+  await redisCommand<string>(config, ["SET", key, value]);
+}
+
+async function redisCommand<T>(config: RedisSettingsConfig, command: unknown[]): Promise<T> {
+  const response = await fetch(config.url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(command),
+    cache: "no-store"
+  });
+  const data = await response.json().catch(() => ({})) as RedisResponse<T>;
+
+  if (!response.ok || data.error) {
+    throw new Error(data.error || `Redis settings store request failed with ${response.status}`);
+  }
+
+  return data.result as T;
 }
 
 function isMissingFileError(error: unknown): boolean {
