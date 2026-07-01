@@ -34,10 +34,10 @@ import {
 import { type SecretIssue, scanTextForSecrets } from "@/lib/security/secretScan";
 import type {
   AuthenticatedUser,
+  CompareFileMetadata,
   CompareFilePayload,
   CompareFilesResult,
   CreatePullRequestResult,
-  FileMetadata,
   GitHubRepository,
   UploadFilePayload
 } from "@/lib/types";
@@ -1018,7 +1018,7 @@ export function FolderToGithubApp() {
         <div className="compareHeader">
           <div>
             <strong>Remote comparison</strong>
-            <p>Only paths, sizes, and Git blob hashes are sent for this check. File contents are uploaded later only for changed files.</p>
+            <p>Compares the commit paths shown above against the selected base branch. Only paths, sizes, and Git blob hashes are sent.</p>
           </div>
           <button
             className="secondaryButton"
@@ -1045,10 +1045,17 @@ export function FolderToGithubApp() {
                 No changed files were found compared with {remoteDiff.baseBranch}. Nothing needs to be uploaded.
               </div>
             )}
+            {remoteDiff.changedFilesCount > 0 && remoteDiff.matchingPathsCount === 0 ? (
+              <div className="softNotice">
+                GitHub found no matching file paths on {remoteDiff.baseBranch}. These files are new on that branch. If this is a repeat upload,
+                make sure the earlier pull request is merged into {remoteDiff.baseBranch}, or choose the branch that already contains the project files.
+              </div>
+            ) : null}
             <div className="statsGrid compactStats" aria-label="GitHub comparison summary">
-              <Stat label="Changed" value={remoteDiff.changedFilesCount} tone="good" />
+              <Stat label="New" value={remoteDiff.newFilesCount} tone="good" />
+              <Stat label="Modified" value={remoteDiff.modifiedFilesCount} tone="warn" />
               <Stat label="Unchanged" value={remoteDiff.unchangedFilesCount} tone="neutral" />
-              <Stat label="Changed size" value={formatBytes(remoteDiff.changedBytes)} tone="neutral" />
+              <Stat label="Matched paths" value={remoteDiff.matchingPathsCount} tone="neutral" />
               <Stat label="Base branch" value={remoteDiff.baseBranch} tone="neutral" />
             </div>
             <div className="twoColumn compareLists">
@@ -1174,7 +1181,7 @@ function FileList({ title, files, empty }: { title: string; files: ReviewedFile[
   );
 }
 
-function MetadataFileList({ title, files, empty }: { title: string; files: FileMetadata[]; empty: string }) {
+function MetadataFileList({ title, files, empty }: { title: string; files: CompareFileMetadata[]; empty: string }) {
   return (
     <div className="fileList">
       <h3>{title}</h3>
@@ -1186,6 +1193,7 @@ function MetadataFileList({ title, files, empty }: { title: string; files: FileM
             <li key={file.path}>
               <div>
                 <strong>{file.path}</strong>
+                <span>{compareStatusLabel(file.status)}</span>
               </div>
               <small>{formatBytes(file.size)}</small>
             </li>
@@ -1195,6 +1203,14 @@ function MetadataFileList({ title, files, empty }: { title: string; files: FileM
       {files.length > 120 ? <p className="mutedText">Showing 120 of {files.length} files.</p> : null}
     </div>
   );
+}
+
+function compareStatusLabel(status: CompareFileMetadata["status"]): string {
+  return {
+    new: "New on the selected base branch",
+    modified: "Path exists, content changed",
+    unchanged: "Already identical on the selected base branch"
+  }[status];
 }
 
 function WorkflowStepper({ steps }: { steps: WorkflowStep[] }) {

@@ -1026,6 +1026,51 @@ input::placeholder {
   font-weight: 700;
 }
 
+.envChecklist {
+  display: grid;
+  gap: 8px;
+}
+
+.envChecklist h2 {
+  margin-bottom: 2px;
+  font-size: 0.95rem;
+  line-height: 1.25;
+}
+
+.envVarRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfcfb;
+  padding: 10px 12px;
+}
+
+.envVarRow > div {
+  min-width: 0;
+}
+
+.envVarRow strong,
+.envVarRow > div span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.envVarRow strong {
+  font-size: 0.9rem;
+  line-height: 1.25;
+}
+
+.envVarRow > div span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
 .fieldHint {
   margin: -5px 0 0;
   color: var(--muted);

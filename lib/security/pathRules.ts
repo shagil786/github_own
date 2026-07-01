@@ -151,6 +151,10 @@ export function evaluateFileDecision(path: string, size: number, maxFileSize = D
     return { action: "ignored", reason: `Ignored sensitive key/certificate file (${extension})` };
   }
 
+  if (size === 0) {
+    return { action: "skipped", reason: "Skipped empty file" };
+  }
+
   if (size > maxFileSize) {
     return { action: "skipped", reason: `Skipped because it is larger than ${formatBytes(maxFileSize)}` };
   }

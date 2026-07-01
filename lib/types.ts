@@ -32,16 +32,26 @@ export type FileMetadata = {
   size: number;
 };
 
+export type CompareFileStatus = "new" | "modified" | "unchanged";
+
+export type CompareFileMetadata = FileMetadata & {
+  status: CompareFileStatus;
+};
+
 export type CompareFilePayload = FileMetadata & {
   sha: string;
 };
 
 export type CompareFilesResult = {
   baseBranch: string;
-  changedFiles: FileMetadata[];
-  unchangedFiles: FileMetadata[];
+  changedFiles: CompareFileMetadata[];
+  unchangedFiles: CompareFileMetadata[];
   changedFilesCount: number;
   unchangedFilesCount: number;
+  newFilesCount: number;
+  modifiedFilesCount: number;
+  matchingPathsCount: number;
+  existingFilesCount: number;
   changedBytes: number;
   unchangedBytes: number;
 };

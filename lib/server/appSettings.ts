@@ -35,7 +35,9 @@ export type PublicSettings = {
   hasGithubClientSecret: boolean;
   hasPersonalAccessToken: boolean;
   hasSessionSecret: boolean;
+  hasSettingsEncryptionKey: boolean;
   githubConfigured: boolean;
+  runtimeSettingsAllowed: boolean;
   missing: string[];
   updatedAt?: string;
 };
@@ -69,7 +71,9 @@ export async function readPublicSettings(): Promise<PublicSettings> {
     hasGithubClientSecret: Boolean(effective.githubClientSecret),
     hasPersonalAccessToken: Boolean(effective.personalAccessToken),
     hasSessionSecret: Boolean(effective.sessionSecret),
+    hasSettingsEncryptionKey: Boolean(process.env.SETTINGS_ENCRYPTION_KEY),
     githubConfigured: missing.length === 0,
+    runtimeSettingsAllowed: runtimeSettingsAllowed(),
     missing,
     updatedAt: stored.updatedAt
   };
