@@ -11,6 +11,6 @@ export async function POST(request: NextRequest) {
   }
 
   const response = NextResponse.json({ ok: true });
-  clearSession(request, response);
+  await clearSession(request, response);
   return response;
 }
