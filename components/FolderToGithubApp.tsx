@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Trash2,
   UploadCloud
 } from "lucide-react";
 import { useEffect, useMemo, useState, type InputHTMLAttributes, type ReactNode } from "react";
@@ -114,6 +115,7 @@ export function FolderToGithubApp() {
   const [repoError, setRepoError] = useState("");
   const [remoteDiffError, setRemoteDiffError] = useState("");
   const [remoteDiff, setRemoteDiff] = useState<CompareFilesResult | null>(null);
+  const [includeRemoteDeletes, setIncludeRemoteDeletes] = useState(false);
   const [result, setResult] = useState<CreatePullRequestResult | null>(null);
   const [githubToken, setGithubToken] = useState("");
   const [isConnectingToken, setIsConnectingToken] = useState(false);
@@ -166,6 +168,13 @@ export function FolderToGithubApp() {
     selectedRepo,
     baseBranch
   );
+  const selectedDeletePaths = useMemo(
+    () => (includeRemoteDeletes && remoteDiff ? remoteDiff.deletedFiles.map((file) => file.path) : []),
+    [includeRemoteDeletes, remoteDiff]
+  );
+  const selectedPrChangeCount = remoteDiff
+    ? remoteDiff.changedFilesCount + selectedDeletePaths.length
+    : filesToCommit.length;
   const baseCreatePrDisabledReason = getCreatePrDisabledReason(
     auth.authenticated,
     isCreatingPr,
@@ -178,14 +187,16 @@ export function FolderToGithubApp() {
   );
   const createPrDisabledReason =
     baseCreatePrDisabledReason ??
-    (remoteDiff?.changedFilesCount === 0
-      ? `No changed files were found compared with ${remoteDiff.baseBranch}. Nothing needs to be uploaded.`
+    (remoteDiff && selectedPrChangeCount === 0
+      ? remoteDiff.deletedFilesCount > 0
+        ? `Only remote files missing locally were found compared with ${remoteDiff.baseBranch}. Enable deletion sync to include them in the PR.`
+        : `No changed or deleted files were found compared with ${remoteDiff.baseBranch}. Nothing needs to be uploaded.`
       : null);
   const filesPreviewValue = remoteDiff
-    ? `${remoteDiff.changedFilesCount} changed, ${remoteDiff.unchangedFilesCount} unchanged skipped`
+    ? `${remoteDiff.changedFilesCount} changed, ${selectedDeletePaths.length} deletions selected, ${remoteDiff.unchangedFilesCount} unchanged skipped`
     : `${filesToCommit.length} approved locally, compare to narrow`;
   const createPrStatus = createPrDisabledReason ?? (remoteDiff
-    ? `${remoteDiff.changedFilesCount} changed files, ${formatBytes(remoteDiff.changedBytes)}`
+    ? `${selectedPrChangeCount} PR changes, ${formatBytes(remoteDiff.changedBytes)} upload bytes`
     : `${filesToCommit.length} approved local files, ${formatBytes(totalCommitBytes)}`);
 
   const workflowSteps = getWorkflowSteps({
@@ -211,6 +222,7 @@ export function FolderToGithubApp() {
   useEffect(() => {
     setRemoteDiff(null);
     setRemoteDiffError("");
+    setIncludeRemoteDeletes(false);
   }, [baseBranch, reviewedFiles, selectedRepo]);
 
   async function refreshAuth() {
@@ -340,6 +352,7 @@ export function FolderToGithubApp() {
     setScanError("");
     setRemoteDiff(null);
     setRemoteDiffError("");
+    setIncludeRemoteDeletes(false);
     setFileFilter("all");
     setFileSearch("");
     setFileDisplayLimit(120);
@@ -474,12 +487,19 @@ export function FolderToGithubApp() {
 
   function buildPullRequestFilePayloads(): UploadFilePayload[] {
     const files = buildApprovedFilePayloads();
-    if (!remoteDiff || remoteDiff.changedFilesCount === 0) {
+    if (!remoteDiff) {
       return files;
+    }
+    if (remoteDiff.changedFilesCount === 0) {
+      return [];
     }
 
     const changedPaths = new Set(remoteDiff.changedFiles.map((file) => file.path));
     return files.filter((file) => changedPaths.has(file.path));
+  }
+
+  function buildPullRequestDeletePaths(): string[] {
+    return selectedDeletePaths;
   }
 
   async function compareWithGitHub() {
@@ -527,8 +547,13 @@ export function FolderToGithubApp() {
       return;
     }
 
-    if (remoteDiff?.changedFilesCount === 0) {
-      setApiError(`No changed files were found compared with ${remoteDiff.baseBranch}. Nothing needs to be uploaded.`);
+    const deletePaths = buildPullRequestDeletePaths();
+    if (remoteDiff && remoteDiff.changedFilesCount + deletePaths.length === 0) {
+      setApiError(
+        remoteDiff.deletedFilesCount > 0
+          ? "Enable deletion sync before creating a deletion-only pull request."
+          : `No changed or deleted files were found compared with ${remoteDiff.baseBranch}. Nothing needs to be uploaded.`
+      );
       return;
     }
 
@@ -543,7 +568,8 @@ export function FolderToGithubApp() {
           branchName,
           commitMessage,
           draft: draftPr,
-          files: buildPullRequestFilePayloads()
+          files: buildPullRequestFilePayloads(),
+          deletePaths
         })
       });
 
@@ -1054,16 +1080,33 @@ export function FolderToGithubApp() {
 
         {remoteDiff ? (
           <>
-            {remoteDiff.changedFilesCount > 0 ? (
+            {remoteDiff.changedFilesCount > 0 || remoteDiff.deletedFilesCount > 0 ? (
               <div className="safeState">
                 <CheckCircle2 size={18} aria-hidden="true" />
-                {remoteDiff.changedFilesCount} changed files will be committed. {remoteDiff.unchangedFilesCount} unchanged files will be skipped.
+                {remoteDiff.changedFilesCount} changed files found. {remoteDiff.deletedFilesCount} remote-only files can be deleted if enabled.
+                {" "}{remoteDiff.unchangedFilesCount} unchanged files will be skipped.
               </div>
             ) : (
               <div className="softNotice">
-                No changed files were found compared with {remoteDiff.baseBranch}. Nothing needs to be uploaded.
+                No changed or deleted files were found compared with {remoteDiff.baseBranch}. Nothing needs to be uploaded.
               </div>
             )}
+            {remoteDiff.deletedFilesCount > 0 ? (
+              <div className={includeRemoteDeletes ? "deleteSyncPanel deleteSyncPanelActive" : "deleteSyncPanel"}>
+                <label className="checkboxRow">
+                  <input
+                    type="checkbox"
+                    checked={includeRemoteDeletes}
+                    onChange={(event) => setIncludeRemoteDeletes(event.target.checked)}
+                  />
+                  Delete remote files missing from this selected folder
+                </label>
+                <p>
+                  This adds delete entries to the upload branch only. Review the pull request before merging because files shown below
+                  will be removed from the target branch after the PR is merged.
+                </p>
+              </div>
+            ) : null}
             {remoteDiff.changedFilesCount > 0 && remoteDiff.matchingPathsCount === 0 ? (
               <div className="softNotice">
                 GitHub found no matching file paths on {remoteDiff.baseBranch}. These files are new on that branch. If this is a repeat upload,
@@ -1073,12 +1116,14 @@ export function FolderToGithubApp() {
             <div className="statsGrid compactStats" aria-label="GitHub comparison summary">
               <Stat label="New" value={remoteDiff.newFilesCount} tone="good" />
               <Stat label="Modified" value={remoteDiff.modifiedFilesCount} tone="warn" />
+              <Stat label="Delete candidates" value={remoteDiff.deletedFilesCount} tone="bad" />
               <Stat label="Unchanged" value={remoteDiff.unchangedFilesCount} tone="neutral" />
               <Stat label="Matched paths" value={remoteDiff.matchingPathsCount} tone="neutral" />
               <Stat label="Base branch" value={remoteDiff.baseBranch} tone="neutral" />
             </div>
             <div className="twoColumn compareLists">
               <MetadataFileList title="Changed files" files={remoteDiff.changedFiles} empty="No changed files." />
+              <MetadataFileList title="Remote-only files" files={remoteDiff.deletedFiles} empty="No remote-only files." />
               <MetadataFileList title="Unchanged files" files={remoteDiff.unchangedFiles} empty="No unchanged files." />
             </div>
           </>
@@ -1096,6 +1141,11 @@ export function FolderToGithubApp() {
           <PreviewItem icon={<GitPullRequest size={16} aria-hidden="true" />} label="New branch" value={branchName || "Enter a branch"} />
           <PreviewItem icon={<FileText size={16} aria-hidden="true" />} label="Commit" value={commitMessage || "Enter a commit message"} />
           <PreviewItem label="Files" value={filesPreviewValue} />
+          <PreviewItem
+            icon={<Trash2 size={16} aria-hidden="true" />}
+            label="Deletions"
+            value={remoteDiff ? `${selectedDeletePaths.length} selected of ${remoteDiff.deletedFilesCount}` : "Compare first"}
+          />
           <PreviewItem label="Review" value={`${ignoredFiles.length} ignored, ${skippedFiles.length} skipped, ${blockedFiles.length} blocked`} />
           <PreviewItem label="Mode" value={draftPr ? "Draft pull request" : "Ready for review"} />
         </div>
@@ -1148,7 +1198,8 @@ export function FolderToGithubApp() {
               {typeof result.uploadedFilesCount === "number" ? (
                 <>
                   {" "}Uploaded {result.uploadedFilesCount} changed files
-                  {result.unchangedFilesCount ? ` and skipped ${result.unchangedFilesCount} unchanged files` : ""}.
+                  {result.deletedFilesCount ? `, deleted ${result.deletedFilesCount} files` : ""}
+                  {result.unchangedFilesCount ? `, and skipped ${result.unchangedFilesCount} unchanged files` : ""}.
                 </>
               ) : null}
             </p>
@@ -1228,7 +1279,8 @@ function compareStatusLabel(status: CompareFileMetadata["status"]): string {
   return {
     new: "New on the selected base branch",
     modified: "Path exists, content changed",
-    unchanged: "Already identical on the selected base branch"
+    unchanged: "Already identical on the selected base branch",
+    deleted: "Exists remotely, missing locally"
   }[status];
 }
 

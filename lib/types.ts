@@ -32,7 +32,7 @@ export type FileMetadata = {
   size: number;
 };
 
-export type CompareFileStatus = "new" | "modified" | "unchanged";
+export type CompareFileStatus = "new" | "modified" | "unchanged" | "deleted";
 
 export type CompareFileMetadata = FileMetadata & {
   status: CompareFileStatus;
@@ -46,14 +46,17 @@ export type CompareFilesResult = {
   baseBranch: string;
   changedFiles: CompareFileMetadata[];
   unchangedFiles: CompareFileMetadata[];
+  deletedFiles: CompareFileMetadata[];
   changedFilesCount: number;
   unchangedFilesCount: number;
+  deletedFilesCount: number;
   newFilesCount: number;
   modifiedFilesCount: number;
   matchingPathsCount: number;
   existingFilesCount: number;
   changedBytes: number;
   unchangedBytes: number;
+  deletedBytes: number;
 };
 
 export type CreatePullRequestPayload = {
@@ -61,6 +64,7 @@ export type CreatePullRequestPayload = {
   branchName: string;
   commitMessage: string;
   files: UploadFilePayload[];
+  deletePaths?: string[];
   baseBranch?: string;
   draft?: boolean;
 };
@@ -71,5 +75,6 @@ export type CreatePullRequestResult = {
   pullRequestUrl: string;
   pullRequestNumber: number;
   uploadedFilesCount?: number;
+  deletedFilesCount?: number;
   unchangedFilesCount?: number;
 };

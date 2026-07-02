@@ -50,6 +50,7 @@ type GitHubTreeResponse = {
     path?: string;
     type?: string;
     sha?: string;
+    size?: number;
   }>;
   truncated?: boolean;
 };
@@ -65,14 +66,23 @@ type FileComparison<T extends { path: string; size: number }> = {
   newFiles: T[];
   modifiedFiles: T[];
   unchangedFiles: T[];
+  deletedFiles: Array<{ path: string; size: number }>;
   changedFilesCount: number;
   newFilesCount: number;
   modifiedFilesCount: number;
   unchangedFilesCount: number;
+  deletedFilesCount: number;
   matchingPathsCount: number;
   existingFilesCount: number;
   changedBytes: number;
   unchangedBytes: number;
+  deletedBytes: number;
+};
+
+type RemoteTreeFile = {
+  path: string;
+  sha: string;
+  size: number;
 };
 
 export type GitHubFileComparison = FileComparison<UploadFilePayload>;
@@ -288,8 +298,13 @@ export async function commitFilesToBranch(
   repoFullName: string,
   branchName: string,
   commitMessage: string,
-  files: UploadFilePayload[]
+  files: UploadFilePayload[],
+  deletePaths: string[] = []
 ): Promise<{ owner: string; repo: string; commitSha: string; defaultBranch: string }> {
+  if (files.length === 0 && deletePaths.length === 0) {
+    throw new GitHubApiError("No file changes were provided for commit.", 400);
+  }
+
   const { owner, repo } = splitPersonalRepo(repoFullName, userLogin);
   const repoData = await verifyWritablePersonalRepo(token, userLogin, owner, repo);
   const { baseSha, baseTreeSha } = await getBranchHead(token, owner, repo, branchName);
@@ -298,12 +313,20 @@ export async function commitFilesToBranch(
     method: "POST",
     body: JSON.stringify({
       base_tree: baseTreeSha,
-      tree: files.map((file) => ({
-        path: file.path,
-        mode: "100644",
-        type: "blob",
-        content: file.content
-      }))
+      tree: [
+        ...files.map((file) => ({
+          path: file.path,
+          mode: "100644",
+          type: "blob",
+          content: file.content
+        })),
+        ...deletePaths.map((path) => ({
+          path,
+          mode: "100644",
+          type: "blob",
+          sha: null
+        }))
+      ]
     })
   });
 
@@ -417,15 +440,23 @@ export async function createPullRequestFromFiles(
   commitMessage: string,
   files: UploadFilePayload[],
   baseBranch?: string,
-  draft = false
+  draft = false,
+  deletePaths: string[] = []
 ): Promise<CreatePullRequestResult> {
   const branch = await createBranch(token, userLogin, repoFullName, branchName, baseBranch);
-  const comparison = await filterChangedFilesForBranch(token, branch.owner, branch.repo, branch.branchName, files);
+  const comparison = await filterChangesForBranch(
+    token,
+    branch.owner,
+    branch.repo,
+    branch.branchName,
+    files,
+    deletePaths
+  );
 
-  if (comparison.changedFiles.length === 0) {
+  if (comparison.changedFiles.length === 0 && comparison.existingDeletePaths.length === 0) {
     await deleteBranchRef(token, branch.owner, branch.repo, branch.branchName).catch(() => undefined);
     throw new GitHubApiError(
-      `No changed files were found compared with ${branch.baseBranch}. Nothing needs to be uploaded.`,
+      `No changed or deleted files were found compared with ${branch.baseBranch}. Nothing needs to be uploaded.`,
       409
     );
   }
@@ -436,7 +467,8 @@ export async function createPullRequestFromFiles(
     repoFullName,
     branch.branchName,
     commitMessage,
-    comparison.changedFiles
+    comparison.changedFiles,
+    comparison.existingDeletePaths
   );
   const pullRequest = await openPullRequest(
     token,
@@ -454,6 +486,7 @@ export async function createPullRequestFromFiles(
     pullRequestUrl: pullRequest.url,
     pullRequestNumber: pullRequest.number,
     uploadedFilesCount: comparison.changedFilesCount,
+    deletedFilesCount: comparison.existingDeletePaths.length,
     unchangedFilesCount: comparison.unchangedFilesCount
   };
 }
@@ -559,15 +592,24 @@ async function getBranchHead(
   };
 }
 
-async function filterChangedFilesForBranch(
+async function filterChangesForBranch(
   token: string,
   owner: string,
   repo: string,
   branchName: string,
-  files: UploadFilePayload[]
-): Promise<GitHubFileComparison> {
+  files: UploadFilePayload[],
+  deletePaths: string[]
+): Promise<GitHubFileComparison & { existingDeletePaths: string[]; ignoredDeletePathsCount: number }> {
   const { baseTreeSha } = await getBranchHead(token, owner, repo, branchName);
-  return compareFilesWithTree(token, owner, repo, baseTreeSha, files);
+  const existingBlobFiles = await getExistingBlobFilesForTree(token, owner, repo, baseTreeSha);
+  const comparison = compareByGitBlobSha(files, existingBlobFiles, (file) => calculateGitBlobSha(file.content));
+  const existingDeletePaths = deletePaths.filter((path) => existingBlobFiles.has(path));
+
+  return {
+    ...comparison,
+    existingDeletePaths,
+    ignoredDeletePathsCount: deletePaths.length - existingDeletePaths.length
+  };
 }
 
 async function compareFilesWithTree(
@@ -577,8 +619,8 @@ async function compareFilesWithTree(
   baseTreeSha: string,
   files: UploadFilePayload[]
 ): Promise<GitHubFileComparison> {
-  const existingBlobShas = await getExistingBlobShasForTree(token, owner, repo, baseTreeSha);
-  return compareByGitBlobSha(files, existingBlobShas, (file) => calculateGitBlobSha(file.content));
+  const existingBlobFiles = await getExistingBlobFilesForTree(token, owner, repo, baseTreeSha);
+  return compareByGitBlobSha(files, existingBlobFiles, (file) => calculateGitBlobSha(file.content));
 }
 
 async function compareFileReferencesWithTree(
@@ -588,16 +630,16 @@ async function compareFileReferencesWithTree(
   baseTreeSha: string,
   files: CompareFilePayload[]
 ): Promise<GitHubFileReferenceComparison> {
-  const existingBlobShas = await getExistingBlobShasForTree(token, owner, repo, baseTreeSha);
-  return compareByGitBlobSha(files, existingBlobShas, (file) => file.sha);
+  const existingBlobFiles = await getExistingBlobFilesForTree(token, owner, repo, baseTreeSha);
+  return compareByGitBlobSha(files, existingBlobFiles, (file) => file.sha);
 }
 
-async function getExistingBlobShasForTree(
+async function getExistingBlobFilesForTree(
   token: string,
   owner: string,
   repo: string,
   baseTreeSha: string
-): Promise<Map<string, string>> {
+): Promise<Map<string, RemoteTreeFile>> {
   const { data } = await githubRequest<GitHubTreeResponse>(
     token,
     `/repos/${owner}/${repo}/git/trees/${baseTreeSha}?recursive=1`
@@ -607,32 +649,38 @@ async function getExistingBlobShasForTree(
     throw new GitHubApiError("The repository tree is too large to compare safely. Try a smaller target repository.", 409);
   }
 
-  const existingBlobShas = new Map<string, string>();
+  const existingBlobFiles = new Map<string, RemoteTreeFile>();
   for (const item of data.tree) {
     if (item.type === "blob" && item.path && item.sha) {
-      existingBlobShas.set(item.path, item.sha);
+      existingBlobFiles.set(item.path, {
+        path: item.path,
+        sha: item.sha,
+        size: typeof item.size === "number" && Number.isFinite(item.size) ? item.size : 0
+      });
     }
   }
 
-  return existingBlobShas;
+  return existingBlobFiles;
 }
 
 function compareByGitBlobSha<T extends { path: string; size: number }>(
   files: T[],
-  existingBlobShas: Map<string, string>,
+  existingBlobFiles: Map<string, RemoteTreeFile>,
   getSha: (file: T) => string
 ): FileComparison<T> {
   const changedFiles: T[] = [];
   const newFiles: T[] = [];
   const modifiedFiles: T[] = [];
   const unchangedFiles: T[] = [];
+  const localPaths = new Set<string>();
 
   for (const file of files) {
-    const existingSha = existingBlobShas.get(file.path);
-    if (!existingSha) {
+    localPaths.add(file.path);
+    const existingFile = existingBlobFiles.get(file.path);
+    if (!existingFile) {
       newFiles.push(file);
       changedFiles.push(file);
-    } else if (existingSha === getSha(file)) {
+    } else if (existingFile.sha === getSha(file)) {
       unchangedFiles.push(file);
     } else {
       modifiedFiles.push(file);
@@ -640,19 +688,27 @@ function compareByGitBlobSha<T extends { path: string; size: number }>(
     }
   }
 
+  const deletedFiles = [...existingBlobFiles.values()]
+    .filter((file) => !localPaths.has(file.path))
+    .map((file) => ({ path: file.path, size: file.size }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+
   return {
     changedFiles,
     newFiles,
     modifiedFiles,
     unchangedFiles,
+    deletedFiles,
     changedFilesCount: changedFiles.length,
     newFilesCount: newFiles.length,
     modifiedFilesCount: modifiedFiles.length,
     unchangedFilesCount: unchangedFiles.length,
+    deletedFilesCount: deletedFiles.length,
     matchingPathsCount: modifiedFiles.length + unchangedFiles.length,
-    existingFilesCount: existingBlobShas.size,
+    existingFilesCount: existingBlobFiles.size,
     changedBytes: changedFiles.reduce((total, file) => total + file.size, 0),
-    unchangedBytes: unchangedFiles.reduce((total, file) => total + file.size, 0)
+    unchangedBytes: unchangedFiles.reduce((total, file) => total + file.size, 0),
+    deletedBytes: deletedFiles.reduce((total, file) => total + file.size, 0)
   };
 }
 

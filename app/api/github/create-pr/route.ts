@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
       repoFullName: payload.repoFullName,
       branchName: payload.branchName,
       fileCount: payload.files.length,
+      deleteCount: payload.deletePaths?.length ?? 0,
       totalBytes: payload.totalBytes
     });
 
@@ -36,7 +37,8 @@ export async function POST(request: NextRequest) {
       payload.commitMessage,
       payload.files,
       payload.baseBranch,
-      payload.draft
+      payload.draft,
+      payload.deletePaths
     );
 
     return NextResponse.json(result);

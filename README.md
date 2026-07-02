@@ -13,8 +13,9 @@ The app does not use local Git, SSH, GitHub Desktop, terminal Git commands, or l
 - The server revalidates paths, limits, ignore rules, and secret scan results before calling GitHub.
 - Ignored, skipped, or blocked files are not uploaded to the backend by the normal UI flow.
 - The file preview first shows locally approved files. The optional GitHub comparison step sends only paths, sizes, and Git blob hashes, then narrows that list to files that differ from the selected base branch.
+- The comparison also shows remote files that are missing from the selected local folder. Those files are deleted only when the user explicitly enables deletion sync, and only on the pull request branch.
 - Uploaded file contents are held only in request memory while the branch, commit, and PR are created.
-- If the user runs the comparison first, PR creation uploads only changed file contents. The backend still compares uploaded text files against the selected base branch and only commits files that are new or changed.
+- If the user runs the comparison first, PR creation uploads only changed file contents. The backend still compares uploaded text files against the selected base branch and only commits files that are new, changed, or explicitly selected for deletion.
 - Server logs include only metadata such as repo name, branch name, file count, and total bytes.
 - Only personal repositories owned by the signed-in GitHub user and writable by that user are listed or accepted.
 
@@ -115,8 +116,9 @@ Vercel Functions currently limit request and response bodies to 4.5 MB. Keep `MA
 3. Review ignored, skipped, blocked, and approved files.
 4. Choose a personal GitHub repository.
 5. Enter a new branch name and commit message.
-6. Compare approved files with GitHub to see new, modified, and unchanged files. This comparison sends file metadata and hashes, not file contents.
-7. Create a pull request. Files already identical to the base branch are skipped automatically.
+6. Compare approved files with GitHub to see new, modified, unchanged, and remote-only files. This comparison sends file metadata and hashes, not file contents.
+7. Optionally enable deletion sync if remote-only files should be removed in the pull request.
+8. Create a pull request. Files already identical to the base branch are skipped automatically, and selected deletions are represented as deleted files in the PR.
 
 If every file appears as new, the selected base branch does not contain matching commit paths yet. Merge the previous pull request into that base branch, or choose the branch that already contains the uploaded project files before comparing again.
 
@@ -128,10 +130,10 @@ If every file appears as new, the selected base branch does not contain matching
 - `GET /api/system/supabase` checks Supabase environment and required table availability without exposing secrets.
 - `GET /api/github/repos` lists writable personal repositories.
 - `POST /api/github/branches` creates a branch from the repo default branch.
-- `POST /api/github/commit-files` commits validated files to a branch.
+- `POST /api/github/commit-files` commits validated files and optional validated delete paths to a branch.
 - `POST /api/github/open-pull-request` opens a pull request.
 - `POST /api/github/initialize-repo` creates the first README commit for an empty repository.
-- `POST /api/github/compare-files` compares approved file paths and Git blob hashes with the selected base branch and returns metadata for changed and unchanged files.
+- `POST /api/github/compare-files` compares approved file paths and Git blob hashes with the selected base branch and returns metadata for changed, unchanged, and remote-only files.
 - `POST /api/github/create-pr` performs the normal end-to-end branch, commit, and PR flow.
 
 ## Notes

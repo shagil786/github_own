@@ -29,6 +29,7 @@ export function validateUploadPayload(input: unknown): ValidatedUpload {
   const commitMessage = readString(input, "commitMessage");
   const baseBranch = readOptionalString(input, "baseBranch");
   const files = input.files;
+  const deletePathsInput = input.deletePaths;
 
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repoFullName)) {
     throw new Error("Repository must be a personal repo full name like owner/name");
@@ -46,12 +47,17 @@ export function validateUploadPayload(input: unknown): ValidatedUpload {
     throw new Error("Commit message must be between 3 and 250 characters");
   }
 
-  if (!Array.isArray(files) || files.length === 0) {
-    throw new Error("No files were provided for commit");
+  if (!Array.isArray(files)) {
+    throw new Error("Files must be provided for commit");
+  }
+
+  const deletePaths = readDeletePaths(deletePathsInput);
+  if (files.length === 0 && deletePaths.length === 0) {
+    throw new Error("No file changes were provided for commit");
   }
 
   const maxFiles = optionalNumberEnv("MAX_FILES", DEFAULT_MAX_FILES);
-  if (files.length > maxFiles) {
+  if (files.length + deletePaths.length > maxFiles) {
     throw new Error(`Too many files. Limit is ${maxFiles}`);
   }
 
@@ -103,6 +109,13 @@ export function validateUploadPayload(input: unknown): ValidatedUpload {
     });
   }
 
+  for (const path of deletePaths) {
+    if (seenPaths.has(path)) {
+      throw new Error(`${path}: path cannot be both uploaded and deleted`);
+    }
+    seenPaths.add(path);
+  }
+
   return {
     repoFullName,
     branchName: branchName.trim(),
@@ -110,6 +123,7 @@ export function validateUploadPayload(input: unknown): ValidatedUpload {
     commitMessage: commitMessage.trim(),
     draft: input.draft === true,
     files: sanitizedFiles,
+    deletePaths,
     totalBytes
   };
 }
@@ -223,6 +237,35 @@ function readOptionalString(input: Record<string, unknown>, key: string): string
     throw new Error(`Invalid field: ${key}`);
   }
   return value.trim();
+}
+
+function readDeletePaths(value: unknown): string[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("deletePaths must be an array");
+  }
+
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string" || item.trim().length === 0) {
+      throw new Error("deletePaths must contain file paths");
+    }
+
+    const validation = validateCommitPath(item);
+    if (!validation.ok) {
+      throw new Error(`${item}: ${validation.reason}`);
+    }
+    if (seen.has(validation.path)) {
+      throw new Error(`${validation.path}: duplicate delete path`);
+    }
+    seen.add(validation.path);
+    paths.push(validation.path);
+  }
+
+  return paths;
 }
 
 function optionalNumberEnv(name: string, fallback: number): number {
