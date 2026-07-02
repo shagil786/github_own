@@ -14,11 +14,9 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Settings as SettingsIcon,
   ShieldCheck,
   UploadCloud
 } from "lucide-react";
-import Link from "next/link";
 import { useEffect, useMemo, useState, type InputHTMLAttributes, type ReactNode } from "react";
 import { Section } from "@/components/Section";
 import { readJsonResponse } from "@/lib/client/apiFetch";
@@ -118,6 +116,8 @@ export function FolderToGithubApp() {
   const [remoteDiffError, setRemoteDiffError] = useState("");
   const [remoteDiff, setRemoteDiff] = useState<CompareFilesResult | null>(null);
   const [result, setResult] = useState<CreatePullRequestResult | null>(null);
+  const [githubToken, setGithubToken] = useState("");
+  const [isConnectingToken, setIsConnectingToken] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -309,6 +309,31 @@ export function FolderToGithubApp() {
     });
     setRepos([]);
     setSelectedRepo("");
+  }
+
+  async function handleTokenConnect() {
+    const token = githubToken.trim();
+    if (!token) {
+      setAuthError("Paste a GitHub token to continue.");
+      return;
+    }
+
+    setIsConnectingToken(true);
+    setAuthError("");
+    try {
+      const response = await fetch("/api/auth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token })
+      });
+      await readJsonResponse(response, "Unable to connect GitHub token.");
+      setGithubToken("");
+      await refreshAuth();
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Unable to connect GitHub token.");
+    } finally {
+      setIsConnectingToken(false);
+    }
   }
 
   async function handleFolderSelection(fileList: FileList | null) {
@@ -671,10 +696,6 @@ export function FolderToGithubApp() {
             <ShieldCheck size={18} aria-hidden="true" />
             API-only upload
           </div>
-          <Link className="secondaryButton" href="/settings">
-            <SettingsIcon size={16} aria-hidden="true" />
-            Settings
-          </Link>
           {vercelDeployUrl ? (
             <a
               className="secondaryButton"
@@ -714,36 +735,37 @@ export function FolderToGithubApp() {
             <img src={auth.user.avatarUrl} alt="" className="avatar" />
             <div>
               <strong>{auth.user.login}</strong>
-              <p>{auth.authSource === "token" ? "Connected with a saved server-side token." : "Signed in for personal repository access."}</p>
+              <p>{auth.authSource === "token" ? "Connected for this browser session. It expires automatically." : "Signed in for personal repository access."}</p>
             </div>
-            {auth.authSource === "oauth" ? (
-              <button className="secondaryButton" type="button" onClick={handleLogout}>
-                <LogOut size={16} aria-hidden="true" />
-                Sign out
-              </button>
-            ) : (
-              <Link className="secondaryButton" href="/settings">
-                <SettingsIcon size={16} aria-hidden="true" />
-                Settings
-              </Link>
-            )}
-          </div>
-        ) : !auth.githubConfigured ? (
-          <div className="authRow">
-            <div>
-              <strong>Connect GitHub to continue.</strong>
-              <p>Set up the GitHub connection once, then return here to create pull requests.</p>
-            </div>
-            <Link className="primaryButton" href="/settings?setup=github">
-              <SettingsIcon size={16} aria-hidden="true" />
-              Set up GitHub
-            </Link>
+            <button className="secondaryButton" type="button" onClick={handleLogout}>
+              <LogOut size={16} aria-hidden="true" />
+              Disconnect
+            </button>
           </div>
         ) : (
-          <a className="primaryButton" href="/api/auth/github/start">
-            <Github size={18} aria-hidden="true" />
-            Sign in with GitHub
-          </a>
+          <div className="tokenConnectForm">
+            <label>
+              GitHub personal access token
+              <input
+                value={githubToken}
+                onChange={(event) => setGithubToken(event.target.value)}
+                placeholder="Paste your GitHub token"
+                type="password"
+                autoComplete="off"
+              />
+            </label>
+            <button
+              className="primaryButton"
+              type="button"
+              onClick={handleTokenConnect}
+              disabled={isConnectingToken || !githubToken.trim()}
+              aria-busy={isConnectingToken}
+            >
+              {isConnectingToken ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Github size={18} aria-hidden="true" />}
+              Connect
+            </button>
+            <p className="fieldHint">Your token is encrypted in an HttpOnly session and expires automatically, usually after 48 hours.</p>
+          </div>
         )}
         {authError ? (
           <div className="inlineError" role="alert">

@@ -216,12 +216,13 @@ export function verifyRuntimeSettingsAdminKey(value: string | null): boolean {
   }
 
   const expected = process.env.SETTINGS_ADMIN_KEY;
-  if (!expected || expected.length < 16 || !value) {
+  const received = value?.trim();
+  if (!expected || expected.length < 16 || !received) {
     return false;
   }
 
   const expectedBytes = Buffer.from(expected);
-  const valueBytes = Buffer.from(value);
+  const valueBytes = Buffer.from(received);
   return expectedBytes.length === valueBytes.length && crypto.timingSafeEqual(expectedBytes, valueBytes);
 }
 

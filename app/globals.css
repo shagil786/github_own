@@ -336,6 +336,18 @@ select:focus-visible,
   margin-left: auto;
 }
 
+.tokenConnectForm {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.tokenConnectForm .fieldHint {
+  grid-column: 1 / -1;
+  margin: -2px 0 0;
+}
+
 .folderDrop {
   display: flex;
   flex-direction: column;
@@ -1143,13 +1155,19 @@ code {
   .topActions,
   .policyNotice,
   .authRow,
+  .tokenConnectForm,
   .actionRow {
     width: 100%;
+  }
+
+  .tokenConnectForm {
+    grid-template-columns: 1fr;
   }
 
   .topActions > *,
   .authRow .primaryButton,
   .authRow .secondaryButton,
+  .tokenConnectForm .primaryButton,
   .actionRow .primaryButton,
   .actionRow .secondaryButton {
     width: 100%;

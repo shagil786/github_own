@@ -12,8 +12,6 @@ type PublicSettings = {
   hasGithubClientSecret: boolean;
   hasPersonalAccessToken: boolean;
   hasSessionSecret: boolean;
-  hasSettingsEncryptionKey: boolean;
-  serverTokenAuthAllowed: boolean;
   githubConfigured: boolean;
   runtimeSettingsAllowed: boolean;
   settingsAdminRequired: boolean;
@@ -21,9 +19,6 @@ type PublicSettings = {
   hasSettingsAdminKey: boolean;
   settingsStorage: "supabase" | "redis" | "filesystem";
   supabaseSettingsConfigured: boolean;
-  redisSettingsConfigured: boolean;
-  vercelBlobDetected: boolean;
-  blobReadWriteTokenConfigured: boolean;
   missing: string[];
   updatedAt?: string;
 };
@@ -84,7 +79,7 @@ export function SettingsPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(settings?.settingsAdminRequired ? { "X-Settings-Admin-Key": settingsAdminKey } : {})
+          ...(settings?.settingsAdminRequired ? { "X-Settings-Admin-Key": settingsAdminKey.trim() } : {})
         },
         body: JSON.stringify({
           authMode,
@@ -167,14 +162,14 @@ export function SettingsPage() {
               <>
                 <div className="settingsMeta">
                   <ShieldCheck size={16} aria-hidden="true" />
-                  Production runtime Settings are enabled. Enter the setup key before saving changes.
+                  Enter the setup key from your deployment settings before saving changes.
                 </div>
                 <label>
-                  Production setup key
+                  Setup key
                   <input
                     value={settingsAdminKey}
                     onChange={(event) => setSettingsAdminKey(event.target.value)}
-                    placeholder={settings.settingsAdminConfigured ? "Enter SETTINGS_ADMIN_KEY" : "SETTINGS_ADMIN_KEY is missing"}
+                    placeholder={settings.settingsAdminConfigured ? "Enter setup key" : "Setup key is missing in deployment"}
                     type="password"
                     autoComplete="new-password"
                     disabled={!settings.settingsAdminConfigured}
@@ -282,23 +277,10 @@ export function SettingsPage() {
                     : "Use this callback URL in your GitHub OAuth app settings."}
             </div>
 
-            {settings?.settingsAdminRequired && settings.settingsStorage === "filesystem" ? (
-              <div className="softNotice">
-                Durable settings storage is not configured. Runtime settings will use filesystem storage, which may not persist on serverless hosts.
-              </div>
-            ) : null}
-
-            {settings?.settingsAdminRequired && settings.vercelBlobDetected && settings.settingsStorage === "filesystem" ? (
-              <div className="softNotice">
-                Vercel Blob variables were detected, but BLOB_STORE_ID and BLOB_WEBHOOK_PUBLIC_KEY do not provide a writable settings store.
-                Use Supabase service-role storage or Redis/Upstash REST variables for runtime Settings.
-              </div>
-            ) : null}
-
             {settings && !settings.githubConfigured ? (
-              <div className="softNotice">
-                {authMode === "token" ? "Paste your GitHub token to connect." : "Complete the GitHub connection fields to enable sign-in."}
-              </div>
+              <p className="fieldHint">
+                {authMode === "token" ? "Paste a token to connect your GitHub account." : "Complete the GitHub connection fields to enable sign-in."}
+              </p>
             ) : null}
 
             {message ? <div className="successInline" role="status" aria-live="polite">{message}</div> : null}
@@ -309,7 +291,10 @@ export function SettingsPage() {
                 className="primaryButton"
                 type="button"
                 onClick={saveSettings}
-                disabled={saving || Boolean(settings?.settingsAdminRequired && !settings.settingsAdminConfigured)}
+                disabled={
+                  saving ||
+                  Boolean(settings?.settingsAdminRequired && (!settings.settingsAdminConfigured || !settingsAdminKey.trim()))
+                }
                 aria-busy={saving}
               >
                 {saving ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <Save size={18} aria-hidden="true" />}
@@ -329,57 +314,16 @@ function ProductionEnvironmentSettings({ settings, callbackUrl }: { settings: Pu
       <div className={settings.githubConfigured ? "successInline" : "softNotice"} role="status">
         {settings.githubConfigured
           ? "Production environment variables are configured."
-          : "Runtime settings are disabled in production. Configure environment variables in your host, then redeploy."}
-      </div>
-
-      <div className="settingsMeta">
-        <ShieldCheck size={16} aria-hidden="true" />
-        ALLOW_SERVER_TOKEN_AUTH enables hosted token mode only. It does not unlock this Settings page.
-      </div>
-
-      <div className="envChecklist" aria-label="Production environment variables">
-        <h2>Production token mode</h2>
-        <EnvVarRow name="GITHUB_TOKEN" configured={settings.hasPersonalAccessToken} detail="Fine-grained token for the personal repositories this tool may update" />
-        <EnvVarRow name="ALLOW_SERVER_TOKEN_AUTH" configured={settings.serverTokenAuthAllowed} detail="Must be true for GITHUB_TOKEN auth on hosted production" />
-      </div>
-
-      <div className="envChecklist" aria-label="Production OAuth environment variables">
-        <h2>Production OAuth mode</h2>
-        <EnvVarRow name="NEXT_PUBLIC_APP_URL" configured={Boolean(settings.appUrl)} detail={settings.appUrl || "Your deployed app URL"} />
-        <EnvVarRow name="GITHUB_CLIENT_ID" configured={Boolean(settings.githubClientId)} detail={settings.githubClientId || "GitHub OAuth or GitHub App client ID"} />
-        <EnvVarRow name="GITHUB_CLIENT_SECRET" configured={settings.hasGithubClientSecret} detail="Stored in Vercel environment variables" />
-        <EnvVarRow name="SESSION_SECRET" configured={settings.hasSessionSecret} detail="Long random value used to protect sessions" />
-        <EnvVarRow name="Settings encryption" configured={settings.hasSettingsEncryptionKey} detail="Uses SETTINGS_ENCRYPTION_KEY, or SETTINGS_ADMIN_KEY as the simple fallback" />
+          : "Add the setup key in your deployment settings, redeploy, then save your GitHub token here."}
       </div>
 
       <div className="envChecklist" aria-label="Runtime settings environment variables">
-        <h2>Runtime Settings editor</h2>
-        <EnvVarRow name="Settings editor access" configured={settings.runtimeSettingsAllowed} detail="Enabled by SETTINGS_ADMIN_KEY. ALLOW_RUNTIME_SETTINGS=true is still accepted as an override." />
-        <EnvVarRow name="SETTINGS_ADMIN_KEY" configured={settings.hasSettingsAdminKey} detail="Required setup key for saving production Settings from the browser" />
-        <EnvVarRow name="Settings encryption" configured={settings.hasSettingsEncryptionKey} detail="A separate SETTINGS_ENCRYPTION_KEY is optional when SETTINGS_ADMIN_KEY is set" />
+        <h2>Setup requirements</h2>
+        <EnvVarRow name="Setup key" configured={settings.hasSettingsAdminKey} detail="Required once to unlock saving settings in production" />
         <EnvVarRow
-          name="Supabase settings store"
+          name="Secure storage"
           configured={settings.supabaseSettingsConfigured}
-          detail="Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY"
-        />
-        <EnvVarRow
-          name="Redis/Upstash REST"
-          configured={settings.redisSettingsConfigured}
-          detail="Optional fallback: KV_REST_API_URL and KV_REST_API_TOKEN, or UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN"
-        />
-      </div>
-
-      <div className="envChecklist" aria-label="Vercel Blob environment variables">
-        <h2>Vercel Blob status</h2>
-        <EnvVarRow
-          name="BLOB_STORE_ID / BLOB_WEBHOOK_PUBLIC_KEY"
-          configured={settings.vercelBlobDetected}
-          detail="Detected Blob metadata/webhook variables. These do not let the app write saved Settings."
-        />
-        <EnvVarRow
-          name="BLOB_READ_WRITE_TOKEN"
-          configured={settings.blobReadWriteTokenConfigured}
-          detail="Required only if Blob-backed runtime Settings storage is added and enabled."
+          detail="Supabase is recommended for saved Settings on production"
         />
       </div>
 

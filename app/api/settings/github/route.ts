@@ -12,7 +12,7 @@ import { guardPostRequest } from "@/lib/server/requestGuards";
 
 export const runtime = "nodejs";
 const RUNTIME_SETTINGS_DISABLED_MESSAGE =
-  "Runtime settings are disabled in production. To save a GitHub key from this Settings page, set SETTINGS_ADMIN_KEY in Vercel and redeploy. Add Redis/Upstash REST variables for durable storage. Hosted token mode can also use GITHUB_TOKEN and ALLOW_SERVER_TOKEN_AUTH=true.";
+  "Runtime settings are disabled in production. To save a GitHub key from this Settings page, set SETTINGS_ADMIN_KEY in Vercel and redeploy. Add Supabase service-role storage for durable saved settings.";
 
 export async function GET() {
   return NextResponse.json(await readPublicSettings());
@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
     );
   }
   if (!verifyRuntimeSettingsAdminKey(request.headers.get("x-settings-admin-key"))) {
-    return NextResponse.json({ error: "Invalid production setup key." }, { status: 401 });
+    return NextResponse.json({ error: "Setup key did not match this deployment." }, { status: 401 });
   }
 
   try {

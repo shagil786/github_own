@@ -6,8 +6,9 @@ The app does not use local Git, SSH, GitHub Desktop, terminal Git commands, or l
 
 ## Security model
 
-- GitHub tokens are never exposed to frontend code.
-- Auth state is stored in an HTTP-only session cookie, while the access token is kept in encrypted server-side session storage.
+- GitHub tokens are submitted only to the backend and are never stored in localStorage.
+- Auth state is stored in an HTTP-only session cookie, while each user's access token is encrypted in server-side session storage.
+- Token sessions expire automatically. Set `SESSION_TTL_HOURS` to control the duration; the default is 48 hours.
 - The browser filters ignored files and scans text files before upload.
 - The server revalidates paths, limits, ignore rules, and secret scan results before calling GitHub.
 - Ignored, skipped, or blocked files are not uploaded to the backend by the normal UI flow.
@@ -49,9 +50,9 @@ This is a safety net, not a formal data-loss-prevention system. Review the file 
 
 ## GitHub auth setup
 
-Fastest personal setup: use **Settings** and choose **Personal access token**. Paste a fine-grained token that has access only to the personal repositories this tool should update.
+Public app flow: each visitor pastes their own fine-grained GitHub token in the app. The backend verifies the token, stores it in that visitor's encrypted session, and expires it automatically. There is no shared GitHub token for all users.
 
-OAuth setup: create a GitHub App and use its Client ID and Client Secret for the web authorization flow.
+OAuth setup is optional: create a GitHub App and use its Client ID and Client Secret for the web authorization flow.
 
 1. In GitHub, go to Developer settings, then GitHub Apps, then create a new app under your personal account.
 2. Set the callback URL to:
@@ -69,7 +70,7 @@ OAuth setup: create a GitHub App and use its Client ID and Client Secret for the
    Metadata: Read-only
    ```
 
-5. Open the app, go to **Settings**, choose **OAuth app**, and save the GitHub Client ID, Client Secret, application URL, and session secret.
+5. Add the GitHub Client ID and Client Secret to your deployment if you want OAuth sign-in in addition to token sessions.
 
 Fallback: a standard GitHub OAuth App also works with the same callback URL. The implementation requests `repo read:user` because it must create branches, commits, and pull requests in private personal repositories.
 
@@ -116,34 +117,30 @@ To deploy this tool itself, open Vercel's clone flow with the GitHub URL for the
 https://vercel.com/new/clone?repository-url=<encoded GitHub repository URL>
 ```
 
-Recommended OAuth/GitHub App production variables:
+Recommended public production variables:
+
+- Supabase server-only variables: `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY`
+- `SESSION_TTL_HOURS=48`, optional
+
+Optional OAuth/GitHub App production variables:
 
 - `GITHUB_CLIENT_ID`
 - `GITHUB_CLIENT_SECRET`
-- `SESSION_SECRET`
-- `SETTINGS_ENCRYPTION_KEY`
 
-Hosted token-mode production variables:
+Optional session encryption override:
+
+- `SESSION_SECRET`
+
+If `SESSION_SECRET` is not set, the app uses the server-side Supabase key to encrypt sessions. Set `SESSION_SECRET` only if you want a separate encryption secret.
+
+Optional self-hosted shared-token variables:
 
 - `GITHUB_TOKEN`
 - `ALLOW_SERVER_TOKEN_AUTH=true`
 
-For hosted production, use OAuth mode or enable the protected runtime Settings editor with a setup key.
-When runtime settings are disabled, the Settings page is read-only and shows which production environment variables are configured or missing.
-`ALLOW_SERVER_TOKEN_AUTH=true` enables token authentication only; it does not unlock the Settings page by itself.
+Create the Supabase tables by running [supabase/settings-schema.sql](/Users/mnizami/Documents/Codex/2026-07-01/build-a-secure-browser-based-folder/supabase/settings-schema.sql) in the Supabase SQL editor. User sessions are encrypted before being stored in the `user_sessions` table and expire using `SESSION_TTL_HOURS`. Keep `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, database passwords, and Postgres URLs server-only. Never use `NEXT_PUBLIC_` for those values.
 
-Production browser-based Settings setup:
-
-- `SETTINGS_ADMIN_KEY`, at least 16 characters
-- Supabase server-only variables: `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY`
-
-When `SETTINGS_ADMIN_KEY` is present in production, the Settings page becomes writable after redeploy and requires the setup key before saving. The GitHub token is then saved by the app instead of being read from `GITHUB_TOKEN`. `ALLOW_RUNTIME_SETTINGS=true` is still accepted as an explicit override, but it is not required when the setup key is configured.
-
-`SETTINGS_ENCRYPTION_KEY` is optional. If omitted, the app derives the encryption key from `SETTINGS_ADMIN_KEY`. Set a separate `SETTINGS_ENCRYPTION_KEY` only if you want to rotate the setup key independently from encrypted saved settings.
-
-Create the Supabase settings table by running [supabase/settings-schema.sql](/Users/mnizami/Documents/Codex/2026-07-01/build-a-secure-browser-based-folder/supabase/settings-schema.sql) in the Supabase SQL editor. Saved runtime settings are encrypted before being stored in the `app_settings` table under `SETTINGS_STORAGE_KEY` (default `folder-to-github:settings`). Keep `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, database passwords, and Postgres URLs server-only. Never use `NEXT_PUBLIC_` for those values.
-
-Redis/Upstash is still supported as a fallback with either `KV_REST_API_URL` and `KV_REST_API_TOKEN`, or `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. Without Supabase or Redis, runtime settings fall back to `.app-data`, which is fine locally or on a persistent server but may not persist on serverless hosting.
+The old Settings storage path is still available for private/self-hosted setups, but public hosted users should connect with their own session token on the main page.
 
 Vercel Blob variables such as `BLOB_STORE_ID` and `BLOB_WEBHOOK_PUBLIC_KEY` do not give the app a writable settings store. They identify the Blob store / webhook verification path, but writing or overwriting a settings object would require `BLOB_READ_WRITE_TOKEN` and a Blob-backed storage implementation. This app currently uses Supabase first, then Redis/Upstash as a fallback, for durable runtime Settings storage in production.
 
@@ -151,7 +148,7 @@ Vercel Functions currently limit request and response bodies to 4.5 MB. Keep `MA
 
 ## Flow
 
-1. Sign in with GitHub.
+1. Paste a GitHub token to create your expiring browser session.
 2. Select a local project folder in the browser.
 3. Review ignored, skipped, blocked, and approved files.
 4. Choose a personal GitHub repository.
@@ -165,6 +162,7 @@ If every file appears as new, the selected base branch does not contain matching
 
 - `GET /api/auth/github/start` starts the GitHub authorization flow.
 - `GET /api/auth/github/callback` exchanges the authorization code and creates a session.
+- `POST /api/auth/token` verifies a personal access token and creates an encrypted expiring session.
 - `POST /api/auth/logout` clears the session.
 - `GET /api/github/me` returns safe session user metadata.
 - `GET /api/github/repos` lists writable personal repositories.
@@ -180,5 +178,5 @@ If every file appears as new, the selected base branch does not contain matching
 ## Notes
 
 - The backend uses GitHub's REST Git Data API. It never shells out to `git`.
-- This app is designed for personal/self-hosted use. For multi-user production, replace the in-memory session store with a durable encrypted store such as Redis or a database-backed session table.
+- Public hosted users connect with their own GitHub token in an expiring encrypted session. Supabase is used for durable server-side session storage when configured.
 - If a branch already exists, the app tries numbered suffixes before reporting a conflict.

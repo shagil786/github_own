@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { fetchAuthenticatedUser } from "@/lib/github/client";
 import type { AuthenticatedUser } from "@/lib/types";
-import { getEffectiveGithubSettings, type EffectiveGithubSettings } from "@/lib/server/appSettings";
+import { getEffectiveGithubSettings } from "@/lib/server/appSettings";
 import { readSession } from "@/lib/server/session";
 
 export type GitHubCredentials = {
@@ -21,16 +21,33 @@ export async function getGitHubCredentials(request: NextRequest): Promise<GitHub
   }
 
   const settings = await getEffectiveGithubSettings();
-  if (settings.authMode === "token" && settings.personalAccessToken) {
-    if (!serverTokenAuthAllowed(request, settings)) {
-      return null;
-    }
+  if (settings.authMode === "token" && settings.personalAccessTokenSource === "env" && settings.personalAccessToken) {
+    return getEnvTokenCredentials(request, settings.personalAccessToken);
+  }
 
+  return null;
+}
+
+async function getEnvTokenCredentials(request: NextRequest, token: string): Promise<GitHubCredentials | null> {
+  if (process.env.ALLOW_SERVER_TOKEN_AUTH === "true") {
     try {
       return {
         source: "token",
-        user: await fetchAuthenticatedUser(settings.personalAccessToken),
-        accessToken: settings.personalAccessToken
+        user: await fetchAuthenticatedUser(token),
+        accessToken: token
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  const host = request.headers.get("host") ?? "";
+  if (process.env.NODE_ENV !== "production" || host.startsWith("localhost") || host.startsWith("127.0.0.1")) {
+    try {
+      return {
+        source: "token",
+        user: await fetchAuthenticatedUser(token),
+        accessToken: token
       };
     } catch {
       return null;
@@ -38,17 +55,4 @@ export async function getGitHubCredentials(request: NextRequest): Promise<GitHub
   }
 
   return null;
-}
-
-function serverTokenAuthAllowed(request: NextRequest, settings: EffectiveGithubSettings): boolean {
-  if (settings.personalAccessTokenSource === "saved") {
-    return true;
-  }
-
-  if (process.env.ALLOW_SERVER_TOKEN_AUTH === "true") {
-    return true;
-  }
-
-  const host = request.headers.get("host") ?? "";
-  return process.env.NODE_ENV !== "production" || host.startsWith("localhost") || host.startsWith("127.0.0.1");
 }
