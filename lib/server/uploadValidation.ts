@@ -7,7 +7,6 @@ import {
 } from "@/lib/security/pathRules";
 import { scanTextForSecrets } from "@/lib/security/secretScan";
 import type { CompareFilePayload, CreatePullRequestPayload, UploadFilePayload } from "@/lib/types";
-import { optionalNumberEnv } from "@/lib/server/env";
 
 export type ValidatedUpload = CreatePullRequestPayload & {
   totalBytes: number;
@@ -224,6 +223,16 @@ function readOptionalString(input: Record<string, unknown>, key: string): string
     throw new Error(`Invalid field: ${key}`);
   }
   return value.trim();
+}
+
+function optionalNumberEnv(name: string, fallback: number): number {
+  const value = process.env[name];
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 export function isSafeBranchName(branchName: string): boolean {
