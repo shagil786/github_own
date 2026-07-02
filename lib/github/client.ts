@@ -721,7 +721,7 @@ function friendlyGitHubError(
 ): string {
   const normalizedMessage = message?.toLowerCase() ?? "";
   if (status === 401) {
-    return "GitHub authentication failed. Reconnect GitHub in Settings.";
+    return "GitHub authentication failed. Reconnect with your GitHub token.";
   }
   if (status === 403) {
     return message?.includes("rate limit")

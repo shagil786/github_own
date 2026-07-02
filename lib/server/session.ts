@@ -3,7 +3,6 @@ import type { NextRequest, NextResponse } from "next/server";
 import type { AuthenticatedUser } from "@/lib/types";
 
 const SESSION_COOKIE = "folder_to_github_session";
-const OAUTH_STATE_COOKIE = "folder_to_github_oauth_state";
 const DEFAULT_SESSION_TTL_HOURS = 48;
 const DEFAULT_SUPABASE_SESSION_TABLE = "user_sessions";
 
@@ -31,6 +30,13 @@ type SupabaseSessionRow = {
   expires_at: string;
   updated_at?: string;
 };
+
+export class SessionStorageSetupError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionStorageSetupError";
+  }
+}
 
 declare global {
   // eslint-disable-next-line no-var
@@ -87,22 +93,6 @@ export async function clearSession(request: NextRequest, response: NextResponse)
   response.cookies.set(SESSION_COOKIE, "", cookieOptions(0));
 }
 
-export function setOAuthStateCookie(response: NextResponse, state: string): void {
-  response.cookies.set(OAUTH_STATE_COOKIE, state, cookieOptions(10 * 60));
-}
-
-export function clearOAuthStateCookie(response: NextResponse): void {
-  response.cookies.set(OAUTH_STATE_COOKIE, "", cookieOptions(0));
-}
-
-export function validateOAuthState(request: NextRequest, receivedState: string | null): boolean {
-  const expected = request.cookies.get(OAUTH_STATE_COOKIE)?.value;
-  if (!expected || !receivedState || expected.length !== receivedState.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(receivedState));
-}
-
 export async function readSession(request: NextRequest): Promise<ActiveSession | null> {
   const sessionId = request.cookies.get(SESSION_COOKIE)?.value;
   if (!sessionId) {
@@ -110,7 +100,15 @@ export async function readSession(request: NextRequest): Promise<ActiveSession |
   }
 
   const supabase = supabaseSessionConfig();
-  const stored = supabase ? await readSupabaseSession(supabase, sessionId) : sessionStore().get(sessionId);
+  let stored: StoredSession | undefined | null;
+  try {
+    stored = supabase ? await readSupabaseSession(supabase, sessionId) : sessionStore().get(sessionId);
+  } catch (error) {
+    if (error instanceof SessionStorageSetupError) {
+      return null;
+    }
+    throw error;
+  }
   if (!stored) {
     return null;
   }
@@ -186,7 +184,6 @@ function sessionTtlMs(): number {
 function sessionSecret(): string {
   const secret =
     process.env.SESSION_SECRET ||
-    process.env.SETTINGS_ENCRYPTION_KEY ||
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.SUPABASE_SECRET_KEY;
   if (secret) {
@@ -235,7 +232,7 @@ async function readSupabaseSession(config: SupabaseSessionConfig, id: string): P
   });
   const data = await response.json().catch(() => null) as SupabaseSessionRow[] | { message?: string } | null;
   if (!response.ok) {
-    throw new Error(supabaseErrorMessage(data, response.status));
+    throw supabaseSessionError(data, response.status);
   }
 
   if (!Array.isArray(data) || !data[0]) {
@@ -273,7 +270,7 @@ async function writeSupabaseSession(
   });
   const data = await response.json().catch(() => null) as { message?: string } | null;
   if (!response.ok) {
-    throw new Error(supabaseErrorMessage(data, response.status));
+    throw supabaseSessionError(data, response.status);
   }
 }
 
@@ -288,7 +285,7 @@ async function deleteSupabaseSession(config: SupabaseSessionConfig, id: string):
   });
   const data = await response.json().catch(() => null) as { message?: string } | null;
   if (!response.ok) {
-    throw new Error(supabaseErrorMessage(data, response.status));
+    throw supabaseSessionError(data, response.status);
   }
 }
 
@@ -305,6 +302,18 @@ function supabaseErrorMessage(data: unknown, status: number): string {
     return data.message;
   }
   return `Supabase session store request failed with ${status}`;
+}
+
+function supabaseSessionError(data: unknown, status: number): Error {
+  const message = supabaseErrorMessage(data, status);
+  if (isMissingSessionTableMessage(message)) {
+    return new SessionStorageSetupError("Session storage is not ready. Run the Supabase schema SQL, then redeploy.");
+  }
+  return new Error(message);
+}
+
+function isMissingSessionTableMessage(message: string): boolean {
+  return message.includes("user_sessions") && message.includes("schema cache");
 }
 
 function isSafeIdentifier(value: string): boolean {

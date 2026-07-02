@@ -47,7 +47,6 @@ type AuthState =
       loading: false;
       authenticated: true;
       githubConfigured: boolean;
-      authSource: "oauth" | "token";
       user: AuthenticatedUser;
     };
 
@@ -122,7 +121,7 @@ export function FolderToGithubApp() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("auth_error")) {
-      setAuthError("GitHub sign-in could not be completed. Check Settings and try again.");
+      setAuthError("GitHub connection could not be completed. Paste your token and try again.");
       window.history.replaceState({}, "", window.location.pathname);
     }
     void refreshAuth();
@@ -222,7 +221,6 @@ export function FolderToGithubApp() {
       const data = await readJsonResponse<{
         authenticated: boolean;
         user?: AuthenticatedUser;
-        authSource?: "oauth" | "token";
         githubConfigured?: boolean;
       }>(response, "Unable to check GitHub connection");
 
@@ -231,7 +229,6 @@ export function FolderToGithubApp() {
           loading: false,
           authenticated: true,
           user: data.user,
-          authSource: data.authSource ?? "oauth",
           githubConfigured: Boolean(data.githubConfigured)
         });
         await loadRepos();
@@ -735,7 +732,7 @@ export function FolderToGithubApp() {
             <img src={auth.user.avatarUrl} alt="" className="avatar" />
             <div>
               <strong>{auth.user.login}</strong>
-              <p>{auth.authSource === "token" ? "Connected for this browser session. It expires automatically." : "Signed in for personal repository access."}</p>
+              <p>Connected for this browser session. It expires automatically.</p>
             </div>
             <button className="secondaryButton" type="button" onClick={handleLogout}>
               <LogOut size={16} aria-hidden="true" />

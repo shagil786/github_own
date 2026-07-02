@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchAuthenticatedUser, GitHubApiError } from "@/lib/github/client";
-import { createSession, setSessionCookie } from "@/lib/server/session";
+import { createSession, SessionStorageSetupError, setSessionCookie } from "@/lib/server/session";
 import { guardPostRequest } from "@/lib/server/requestGuards";
 
 export const runtime = "nodejs";
@@ -20,12 +20,15 @@ export async function POST(request: NextRequest) {
 
     const user = await fetchAuthenticatedUser(token);
     const sessionId = await createSession(token, user);
-    const response = NextResponse.json({ authenticated: true, user, authSource: "token" });
+    const response = NextResponse.json({ authenticated: true, user });
     setSessionCookie(response, sessionId);
     return response;
   } catch (error) {
     if (error instanceof GitHubApiError) {
       return NextResponse.json({ error: "GitHub token could not be verified." }, { status: 400 });
+    }
+    if (error instanceof SessionStorageSetupError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
     }
 
     return NextResponse.json(
