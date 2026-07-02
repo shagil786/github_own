@@ -472,6 +472,26 @@ select:focus-visible,
   margin-top: 12px;
 }
 
+.deleteSyncPanel {
+  border: 1px solid var(--red-border);
+  border-radius: 8px;
+  background: var(--red-bg);
+  color: var(--red-text);
+  padding: 12px;
+  margin: 12px 0 0;
+}
+
+.deleteSyncPanelActive {
+  border-color: #c85f5f;
+}
+
+.deleteSyncPanel p {
+  margin: 6px 0 0;
+  color: var(--red-text);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 .reviewToolbar {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) auto;

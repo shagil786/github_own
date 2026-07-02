@@ -26,13 +26,15 @@ export async function POST(request: NextRequest) {
       payload.repoFullName,
       payload.branchName,
       payload.commitMessage,
-      payload.files
+      payload.files,
+      payload.deletePaths
     );
 
     console.info("folder_to_github_commit_created", {
       repoFullName: payload.repoFullName,
       branchName: payload.branchName,
       fileCount: payload.files.length,
+      deleteCount: payload.deletePaths?.length ?? 0,
       totalBytes: payload.totalBytes,
       commitSha: commit.commitSha
     });
